@@ -4,7 +4,7 @@ toc: false
 
 <div class="hero">
   <h1>sql garden</h1>
-  <h2>the garden of sql design and solice</h2>
+  <h2>the garden of sql design and solace</h2>
   <p><code>🌱 coming soon 🌱</code></p>
 </div>
 
