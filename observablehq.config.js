@@ -22,6 +22,23 @@ export default {
   //   }
   // ],
 
+  pages: [
+    // { name: 'playground', path: '/playground' },
+    { name: 'ethos', path: '/ethos' },
+    {
+      name: 'Tools',
+      pages: [
+        { name: 'the basics', path: '/tools/the-basics' }
+      ]
+    },
+    {
+      name: 'Models',
+      pages: [
+        { name: 'Transactional Outbox', path: '/models/transactional-outbox'}
+      ]
+    }
+  ],
+
   // Content to add to the head of the page, e.g. for a favicon:
   head: `
   <!-- Basic site info-->
