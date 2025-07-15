@@ -7,6 +7,6 @@ sql garden is a call to action to sew your own schema. The goal is to be akin to
 
 ## goals
 
-1. simplify the understanding and adoption of core model use-cases
+1. simplify the understanding and spirit of data modeling
 2. educate and spread data modeling examples for pragmatic utility
 3. make data modeling as simple as possible for all software
