@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useDuckDB, type QueryResult } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
 
-const { isReady, query, exec, getTableInfo } = useDuckDB()
+const { isReady, query, getTableInfo } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { pendingQuery } = useQueryBridge()
 const { dropTable } = useTableOps()
