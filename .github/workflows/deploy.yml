@@ -1,0 +1,72 @@
+# Builds the Vite app and deploys to GitHub Pages.
+#
+# Prerequisites (one-time repo setup):
+#   Settings → Pages → Source → GitHub Actions
+#
+# Cross-origin isolation note:
+#   GitHub Pages doesn't support custom response headers, so the
+#   COOP/COEP headers in vite.config.ts are dev-only. DuckDB Wasm's
+#   selectBundle() detects the missing headers at runtime and falls back
+#   to the single-threaded MVP bundle automatically — the app still works.
+#
+#   If you want the faster multi-threaded bundle on Pages, add
+#   coi-serviceworker (https://github.com/gzuidhof/coi-serviceworker):
+#     npm i -D coi-serviceworker
+#     cp node_modules/coi-serviceworker/coi-serviceworker.js public/
+#   Then add to index.html <head>:
+#     <script src="/coi-serviceworker.js"></script>
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [rewrite]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only allow one deployment at a time; cancel any in-progress run
+# when a new push arrives, but don't cancel the deploy step itself.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
