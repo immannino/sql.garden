@@ -1,25 +1,77 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import type { TableNode } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
 
 const props = defineProps<{ table: TableNode; selected?: boolean }>()
 const emit = defineEmits<{
-  dragStart: [{ tableId: string; mouseX: number; mouseY: number }]
+  dragStart: [{ id: string; mouseX: number; mouseY: number }]
+  resizeStart: [{ id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }]
 }>()
 
 const { sendQuery } = useQueryBridge()
-const { dropTable } = useTableOps()
+const { dropTable, renameTable } = useTableOps()
 
 const deleteConfirm = ref(false)
 let deleteTimer: ReturnType<typeof setTimeout> | null = null
+
+// ── Inline rename ─────────────────────────────────────────────────────────────
+const isRenaming = ref(false)
+const renameValue = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
+const renameError = ref(false)
+
+function startRename(e: MouseEvent) {
+  e.stopPropagation()
+  if (deleteConfirm.value) return
+  isRenaming.value = true
+  renameValue.value = props.table.name
+  renameError.value = false
+  nextTick(() => {
+    renameInputRef.value?.select()
+  })
+}
+
+async function commitRename() {
+  const newName = renameValue.value.trim()
+  if (!newName || newName === props.table.name) {
+    cancelRename()
+    return
+  }
+  isRenaming.value = false
+  try {
+    await renameTable(props.table.id, props.table.name, newName)
+  } catch (e) {
+    console.warn('Rename failed:', e)
+  }
+}
+
+function cancelRename() {
+  isRenaming.value = false
+  renameError.value = false
+}
+
+function onRenameKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+  if (e.key === 'Escape') cancelRename()
+}
 
 // ── Canvas drag ───────────────────────────────────────────────────────────────
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   e.stopPropagation()
-  emit('dragStart', { tableId: props.table.id, mouseX: e.clientX, mouseY: e.clientY })
+  emit('dragStart', { id: props.table.id, mouseX: e.clientX, mouseY: e.clientY })
+}
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+const cardRef = ref<HTMLElement | null>(null)
+const DEFAULT_W = 240
+
+function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
+  const startW = props.table.w ?? cardRef.value?.offsetWidth ?? DEFAULT_W
+  const startH = props.table.h ?? cardRef.value?.offsetHeight ?? 200
+  emit('resizeStart', { id: props.table.id, mouseX: e.clientX, mouseY: e.clientY, startW, startH, direction })
 }
 
 // ── Query button ──────────────────────────────────────────────────────────────
@@ -57,9 +109,10 @@ function typeColor(type: string) {
 
 <template>
   <div
+    ref="cardRef"
     class="table-card"
-    :class="{ selected }"
-    :style="{ left: `${table.x}px`, top: `${table.y}px` }"
+    :class="{ selected, 'has-h': !!table.h }"
+    :style="{ left: `${table.x}px`, top: `${table.y}px`, width: `${table.w ?? 240}px`, ...(table.h ? { height: `${table.h}px` } : {}) }"
     @mousedown="onMouseDown"
     @mouseleave="onCardMouseLeave"
   >
@@ -70,7 +123,24 @@ function typeColor(type: string) {
         <line x1="1" y1="5.5" x2="15" y2="5.5" stroke="white" stroke-width="1.5"/>
         <line x1="5.5" y1="5.5" x2="5.5" y2="15" stroke="white" stroke-width="1.5"/>
       </svg>
-      <span class="card-name">{{ table.name }}</span>
+
+      <input
+        v-if="isRenaming"
+        ref="renameInputRef"
+        v-model="renameValue"
+        class="card-name-input"
+        @mousedown.stop
+        @keydown="onRenameKeydown"
+        @blur="commitRename"
+      />
+      <span
+        v-else
+        class="card-name"
+        title="Double-click to rename"
+        @mousedown.stop
+        @dblclick="startRename"
+      >{{ table.name }}</span>
+
       <span class="card-count">{{ table.columns.length }}</span>
 
       <button
@@ -130,13 +200,25 @@ function typeColor(type: string) {
         Query
       </button>
     </div>
+
+    <!-- Resize handles -->
+    <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
+    <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
+    <div class="rh-se" @mousedown.stop="startResize($event, 'se')">
+      <svg viewBox="0 0 8 8" fill="none">
+        <line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        <line x1="7" y1="4" x2="4" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .table-card {
   position: absolute;
-  width: 240px;
+  width: 240px; /* overridden by inline style when w is set */
+  display: flex;
+  flex-direction: column;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-1);
@@ -144,6 +226,13 @@ function typeColor(type: string) {
   user-select: none;
   cursor: grab;
   transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+/* When h is explicitly set, body scrolls instead of expanding */
+.table-card.has-h .card-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .table-card:active {
@@ -180,6 +269,28 @@ function typeColor(type: string) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: text;
+}
+
+.card-name-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 3px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+  padding: 1px 4px;
+  outline: none;
+  width: 100%;
+}
+
+.card-name-input:focus {
+  border-color: rgba(255, 255, 255, 0.75);
+  background: rgba(0, 0, 0, 0.35);
 }
 
 .card-count {
@@ -345,4 +456,35 @@ function typeColor(type: string) {
   background: rgba(88, 166, 255, 0.08);
   border-color: rgba(88, 166, 255, 0.3);
 }
+
+/* ── Resize handles ──────────────────────────────────────────────────────── */
+.rh-e, .rh-s, .rh-se { position: absolute; opacity: 0; transition: opacity 0.15s; }
+
+.rh-e {
+  right: 0; top: 8px; bottom: 20px; width: 6px;
+  cursor: ew-resize;
+  border-radius: 0 4px 4px 0;
+}
+.rh-s {
+  bottom: 0; left: 8px; right: 20px; height: 6px;
+  cursor: ns-resize;
+  border-radius: 0 0 4px 4px;
+}
+.rh-se {
+  right: 0; bottom: 0; width: 18px; height: 18px;
+  cursor: se-resize;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+  border-radius: 0 0 7px 0;
+}
+.rh-se svg { width: 8px; height: 8px; }
+
+.rh-e:hover, .rh-s:hover { background: rgba(88, 166, 255, 0.2); }
+
+.table-card:hover .rh-e,
+.table-card:hover .rh-s,
+.table-card:hover .rh-se,
+.table-card.selected .rh-e,
+.table-card.selected .rh-s,
+.table-card.selected .rh-se { opacity: 1; }
 </style>

@@ -4,8 +4,10 @@ import { useDuckDB, type QueryResult } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
+import { usePersistence } from '../composables/usePersistence'
 
 const { isReady, query, getTableInfo } = useDuckDB()
+const { saveTable } = usePersistence()
 const schemaStore = useSchemaStore()
 const { pendingQuery } = useQueryBridge()
 const { dropTable } = useTableOps()
@@ -37,8 +39,9 @@ const isRefreshingStats = ref(false)
 /** Refresh row counts for every table currently in the schema store. */
 async function refreshStats() {
   isRefreshingStats.value = true
+  const tables = schemaStore.nodes.filter((n) => n.kind === 'table')
   await Promise.allSettled(
-    schemaStore.tables.map(async (table) => {
+    tables.map(async (table) => {
       try {
         const r = await query(`SELECT COUNT(*) AS n FROM "${table.name}"`)
         const count = r.rows[0]?.n
@@ -59,19 +62,20 @@ function parseCreatedTables(sqlText: string): string[] {
 
 /** Pick a canvas position for a newly discovered table. */
 function nextPosition(): { x: number; y: number } {
-  if (!schemaStore.tables.length) return { x: 60, y: 80 }
-  const maxX = Math.max(...schemaStore.tables.map((t) => t.x))
-  const paired = schemaStore.tables.find((t) => t.x === maxX)!
+  if (!schemaStore.nodes.length) return { x: 60, y: 80 }
+  const maxX = Math.max(...schemaStore.nodes.map((n) => n.x))
+  const paired = schemaStore.nodes.find((n) => n.x === maxX)!
   return { x: maxX + 280, y: paired.y }
 }
 
 /** Fetch DuckDB schema for a freshly created table and add it to the canvas. */
 async function syncCreatedTable(name: string) {
-  if (schemaStore.tables.some((t) => t.name === name)) return
+  if (schemaStore.nodes.some((n) => n.kind === 'table' && n.name === name)) return
   try {
     const columns = await getTableInfo(name)
     const { x, y } = nextPosition()
     schemaStore.addTable({ id: name, name, x, y, columns })
+    saveTable(name).catch(console.warn)
   } catch (e) {
     console.warn('Failed to sync table to canvas:', name, e)
   }
@@ -144,11 +148,32 @@ function isNull(val: unknown): boolean {
   return val === null || val === undefined
 }
 
+// ── Panel resize ──────────────────────────────────────────────────────────────
+const emit = defineEmits<{ close: [] }>()
+const panelWidth = ref(420)
+
+function onResizeHandleMouseDown(e: MouseEvent) {
+  e.preventDefault()
+  const startX = e.clientX
+  const startW = panelWidth.value
+
+  function onMove(ev: MouseEvent) {
+    panelWidth.value = Math.max(280, Math.min(900, startW + (startX - ev.clientX)))
+  }
+  function onUp() {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 defineExpose({ refreshStats })
 </script>
 
 <template>
-  <div class="query-panel">
+  <div class="query-panel" :style="{ width: panelWidth + 'px' }">
+    <div class="panel-resize-handle" @mousedown="onResizeHandleMouseDown" />
     <!-- Tab bar -->
     <div class="tab-bar">
       <button
@@ -175,7 +200,13 @@ defineExpose({ refreshStats })
           <line x1="5" y1="5" x2="5" y2="13" stroke="currentColor" stroke-width="1.3"/>
         </svg>
         Schema
-        <span class="tab-count">{{ schemaStore.tables.length }}</span>
+        <span class="tab-count">{{ schemaStore.nodes.filter(n => n.kind === 'table').length }}</span>
+      </button>
+      <div class="tab-spacer" />
+      <button class="close-btn" title="Hide panel" @click="emit('close')">
+        <svg viewBox="0 0 12 12" fill="none">
+          <path d="M9 3L3 9M3 3l6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
       </button>
     </div>
 
@@ -254,7 +285,7 @@ defineExpose({ refreshStats })
     <!-- ── Schema tab ────────────────────────────────────────────────────── -->
     <template v-else-if="activeTab === 'schema'">
       <div class="schema-header">
-        <span class="schema-title">{{ schemaStore.tables.length }} tables</span>
+        <span class="schema-title">{{ schemaStore.nodes.filter(n => n.kind === 'table').length }} tables</span>
         <button
           class="refresh-btn"
           :class="{ spinning: isRefreshingStats }"
@@ -271,12 +302,12 @@ defineExpose({ refreshStats })
       </div>
 
       <div class="schema-list">
-        <div v-if="!schemaStore.tables.length" class="empty-state">
+        <div v-if="!schemaStore.nodes.filter(n => n.kind === 'table').length" class="empty-state">
           No tables yet — create one with SQL or upload a CSV
         </div>
 
         <div
-          v-for="table in schemaStore.tables"
+          v-for="table in schemaStore.nodes.filter(n => n.kind === 'table')"
           :key="table.id"
           class="table-row"
           @click="selectTable(table.name)"
@@ -315,13 +346,29 @@ defineExpose({ refreshStats })
 
 <style scoped>
 .query-panel {
-  width: 420px;
+  width: 420px; /* overridden by inline style */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--border);
   background: var(--surface-0);
   overflow: hidden;
+  position: relative;
+}
+
+.panel-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.panel-resize-handle:hover,
+.panel-resize-handle:active {
+  background: rgba(88, 166, 255, 0.15);
 }
 
 /* ── Tabs ─────────────────────────────────────────────────────────────────── */
@@ -371,6 +418,25 @@ defineExpose({ refreshStats })
   color: var(--text-muted);
   margin-left: 2px;
 }
+
+.tab-spacer { flex: 1; }
+
+.close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 40px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+  flex-shrink: 0;
+}
+
+.close-btn svg { width: 12px; height: 12px; }
+.close-btn:hover { color: var(--text-primary); }
 
 /* ── Query tab ────────────────────────────────────────────────────────────── */
 .editor-area {

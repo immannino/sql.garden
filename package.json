@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
+    "@observablehq/plot": "^0.6.17",
     "pinia": "^3.0.4",
     "vue": "^3.5.34"
   },
@@ -19,6 +20,9 @@
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
-    "vue-tsc": "^3.2.8"
+    "vite-plugin-pwa": "^1.3.0",
+    "vue-tsc": "^3.2.8",
+    "workbox-core": "^7.4.1",
+    "workbox-precaching": "^7.4.1"
   }
 }

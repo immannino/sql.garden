@@ -10,6 +10,7 @@ export interface Column {
 }
 
 export interface TableNode {
+  kind: 'table'
   id: string
   name: string
   x: number
@@ -17,7 +18,39 @@ export interface TableNode {
   columns: Column[]
   color: string
   rowCount?: number
+  w?: number
+  h?: number
 }
+
+export interface QueryNode {
+  kind: 'query'
+  id: string
+  name: string
+  x: number
+  y: number
+  sql: string
+  color: string
+  w?: number
+  h?: number
+}
+
+export interface ChartNode {
+  kind: 'chart'
+  id: string
+  name: string
+  x: number
+  y: number
+  sourceId: string | null
+  sql: string
+  chartType: 'barY' | 'lineY' | 'areaY' | 'dot'
+  xColumn: string
+  yColumn: string
+  color: string
+  w?: number
+  h?: number
+}
+
+export type CanvasNode = TableNode | QueryNode | ChartNode
 
 const PALETTE = [
   '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
@@ -26,34 +59,75 @@ const PALETTE = [
 
 let colorCursor = 0
 
-export const useSchemaStore = defineStore('schema', () => {
-  const tables = ref<TableNode[]>([])
+function nextColor(override?: string): string {
+  return override ?? PALETTE[colorCursor++ % PALETTE.length]
+}
 
-  function addTable(table: Omit<TableNode, 'color'> & { color?: string }) {
-    tables.value.push({
-      ...table,
-      color: table.color ?? PALETTE[colorCursor++ % PALETTE.length],
-    })
+export const useSchemaStore = defineStore('schema', () => {
+  const nodes = ref<CanvasNode[]>([])
+
+  function addTable(table: Omit<TableNode, 'kind' | 'color'> & { color?: string }) {
+    nodes.value.push({ kind: 'table', ...table, color: nextColor(table.color) })
+  }
+
+  function addQueryNode(node: Omit<QueryNode, 'kind' | 'color'> & { color?: string }) {
+    nodes.value.push({ kind: 'query', ...node, color: nextColor(node.color) })
+  }
+
+  function addChartNode(node: Omit<ChartNode, 'kind' | 'color'> & { color?: string }) {
+    nodes.value.push({ kind: 'chart', ...node, color: nextColor(node.color) })
   }
 
   function updatePosition(id: string, x: number, y: number) {
-    const t = tables.value.find((t) => t.id === id)
-    if (t) { t.x = x; t.y = y }
+    const n = nodes.value.find((n) => n.id === id)
+    if (n) { n.x = x; n.y = y }
   }
 
-  function removeTable(id: string) {
-    tables.value = tables.value.filter((t) => t.id !== id)
+  function removeNode(id: string) {
+    nodes.value = nodes.value.filter((n) => n.id !== id)
+  }
+
+  function renameNode(id: string, newName: string) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n) { n.id = newName; n.name = newName }
   }
 
   function setRowCount(id: string, count: number) {
-    const t = tables.value.find((t) => t.id === id)
-    if (t) t.rowCount = count
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'table') n.rowCount = count
+  }
+
+  function updateQuerySql(id: string, sql: string) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'query') n.sql = sql
+  }
+
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'chart') Object.assign(n, updates)
+  }
+
+  function updateNodeSize(id: string, w: number, h: number) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (!n) return
+    n.w = w
+    n.h = h
+  }
+
+  function setColorCursor(n: number) {
+    colorCursor = n
   }
 
   function clear() {
-    tables.value = []
+    nodes.value = []
     colorCursor = 0
   }
 
-  return { tables, addTable, updatePosition, removeTable, setRowCount, clear }
+  return {
+    nodes,
+    addTable, addQueryNode, addChartNode,
+    updatePosition, updateNodeSize, removeNode, renameNode,
+    setRowCount, updateQuerySql, updateChartConfig,
+    setColorCursor, clear,
+  }
 })

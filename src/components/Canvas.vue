@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import TableCard from './TableCard.vue'
+import QueryCard from './QueryCard.vue'
+import ChartCard from './ChartCard.vue'
 import { useSchemaStore } from '../stores/schema'
 
 const schemaStore = useSchemaStore()
@@ -12,17 +14,24 @@ const panStart = ref({ x: 0, y: 0 })
 const selectedId = ref<string | null>(null)
 
 interface DragState {
-  tableId: string
+  id: string
   startMouse: { x: number; y: number }
   startPos: { x: number; y: number }
 }
 const drag = ref<DragState | null>(null)
 
+interface ResizeState {
+  id: string
+  startMouse: { x: number; y: number }
+  startSize: { w: number; h: number }
+  direction: 'e' | 's' | 'se'
+}
+const resize = ref<ResizeState | null>(null)
+const resizeDir = computed(() => resize.value?.direction ?? null)
+
 const viewportRef = ref<HTMLElement | null>(null)
 
 const BASE_GRID = 24
-
-// v-bind in <style> requires these to be plain strings
 const gridCellSize = computed(() => `${BASE_GRID * zoom.value}px`)
 const bgOffset = computed(() => `${pan.value.x}px ${pan.value.y}px`)
 
@@ -51,57 +60,67 @@ function onWheel(e: WheelEvent) {
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 1) return
   const target = e.target as HTMLElement
-  if (target.closest('.table-card')) return
+  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card')) return
   selectedId.value = null
   isPanning.value = true
   panStart.value = { x: e.clientX - pan.value.x, y: e.clientY - pan.value.y }
   e.preventDefault()
 }
 
-function onCardDragStart(payload: { tableId: string; mouseX: number; mouseY: number }) {
-  const table = schemaStore.tables.find((t) => t.id === payload.tableId)
-  if (!table) return
-  selectedId.value = payload.tableId
-  drag.value = {
-    tableId: payload.tableId,
+function onCardResizeStart(payload: { id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }) {
+  resize.value = {
+    id: payload.id,
     startMouse: { x: payload.mouseX, y: payload.mouseY },
-    startPos: { x: table.x, y: table.y },
+    startSize: { w: payload.startW, h: payload.startH },
+    direction: payload.direction,
+  }
+}
+
+function onCardDragStart(payload: { id: string; mouseX: number; mouseY: number }) {
+  const node = schemaStore.nodes.find((n) => n.id === payload.id)
+  if (!node) return
+  selectedId.value = payload.id
+  drag.value = {
+    id: payload.id,
+    startMouse: { x: payload.mouseX, y: payload.mouseY },
+    startPos: { x: node.x, y: node.y },
   }
 }
 
 function onMouseMove(e: MouseEvent) {
   if (isPanning.value) {
-    pan.value = {
-      x: e.clientX - panStart.value.x,
-      y: e.clientY - panStart.value.y,
-    }
+    pan.value = { x: e.clientX - panStart.value.x, y: e.clientY - panStart.value.y }
   } else if (drag.value) {
     const dx = (e.clientX - drag.value.startMouse.x) / zoom.value
     const dy = (e.clientY - drag.value.startMouse.y) / zoom.value
-    schemaStore.updatePosition(
-      drag.value.tableId,
-      drag.value.startPos.x + dx,
-      drag.value.startPos.y + dy,
-    )
+    schemaStore.updatePosition(drag.value.id, drag.value.startPos.x + dx, drag.value.startPos.y + dy)
+  } else if (resize.value) {
+    const { id, startMouse, startSize, direction } = resize.value
+    const dx = (e.clientX - startMouse.x) / zoom.value
+    const dy = (e.clientY - startMouse.y) / zoom.value
+    const newW = direction !== 's' ? Math.max(160, startSize.w + dx) : startSize.w
+    const newH = direction !== 'e' ? Math.max(60,  startSize.h + dy) : startSize.h
+    schemaStore.updateNodeSize(id, newW, newH)
   }
 }
 
 function onMouseUp() {
   isPanning.value = false
   drag.value = null
+  resize.value = null
 }
 
 function fitView() {
-  if (!schemaStore.tables.length || !viewportRef.value) return
+  if (!schemaStore.nodes.length || !viewportRef.value) return
   const padding = 80
   const vw = viewportRef.value.clientWidth
   const vh = viewportRef.value.clientHeight
-  const xs = schemaStore.tables.map((t) => t.x)
-  const ys = schemaStore.tables.map((t) => t.y)
+  const xs = schemaStore.nodes.map((n) => n.x)
+  const ys = schemaStore.nodes.map((n) => n.y)
   const minX = Math.min(...xs)
   const minY = Math.min(...ys)
-  const maxX = Math.max(...xs) + 240
-  const maxY = Math.max(...ys) + 200
+  const maxX = Math.max(...xs) + 340
+  const maxY = Math.max(...ys) + 260
   const contentW = maxX - minX
   const contentH = maxY - minY
   const z = Math.min(4, Math.max(0.08, Math.min((vw - padding * 2) / contentW, (vh - padding * 2) / contentH)))
@@ -112,7 +131,17 @@ function fitView() {
   }
 }
 
-defineExpose({ fitView, zoom, pan })
+function getCenter(): { x: number; y: number } {
+  if (!viewportRef.value) return { x: 200, y: 200 }
+  const vw = viewportRef.value.clientWidth
+  const vh = viewportRef.value.clientHeight
+  return {
+    x: (vw / 2 - pan.value.x) / zoom.value,
+    y: (vh / 2 - pan.value.y) / zoom.value,
+  }
+}
+
+defineExpose({ fitView, getCenter, zoom, pan })
 
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)
@@ -129,25 +158,38 @@ onUnmounted(() => {
   <div
     ref="viewportRef"
     class="canvas-viewport"
-    :class="{ panning: isPanning }"
+    :class="{ panning: isPanning, 'resize-e': resizeDir === 'e', 'resize-s': resizeDir === 's', 'resize-se': resizeDir === 'se' }"
     @wheel.prevent="onWheel"
     @mousedown="onMouseDown"
   >
-    <!-- Grid background uses v-bind CSS to move with pan/zoom -->
     <div class="canvas-grid" />
 
-    <!-- All table nodes live in this transform layer -->
     <div class="canvas-layer" :style="transformStyle">
-      <TableCard
-        v-for="table in schemaStore.tables"
-        :key="table.id"
-        :table="table"
-        :selected="selectedId === table.id"
-        @drag-start="onCardDragStart"
-      />
+      <template v-for="node in schemaStore.nodes" :key="node.id">
+        <TableCard
+          v-if="node.kind === 'table'"
+          :table="node"
+          :selected="selectedId === node.id"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <QueryCard
+          v-else-if="node.kind === 'query'"
+          :node="node"
+          :selected="selectedId === node.id"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <ChartCard
+          v-else-if="node.kind === 'chart'"
+          :node="node"
+          :selected="selectedId === node.id"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+      </template>
     </div>
 
-    <!-- Zoom badge -->
     <div class="zoom-badge">{{ zoomPct }}%</div>
   </div>
 </template>
@@ -160,9 +202,10 @@ onUnmounted(() => {
   cursor: default;
 }
 
-.canvas-viewport.panning {
-  cursor: grabbing;
-}
+.canvas-viewport.panning    { cursor: grabbing; }
+.canvas-viewport.resize-e   { cursor: ew-resize; }
+.canvas-viewport.resize-s   { cursor: ns-resize; }
+.canvas-viewport.resize-se  { cursor: se-resize; }
 
 .canvas-grid {
   position: absolute;

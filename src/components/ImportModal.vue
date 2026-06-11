@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
+import { usePersistence } from '../composables/usePersistence'
 
 const emit = defineEmits<{ close: [] }>()
 
 const { registerFile, dropFile, exec, query, getTableInfo } = useDuckDB()
 const schemaStore = useSchemaStore()
+const { saveTable } = usePersistence()
 
 type Status = 'queued' | 'processing' | 'done' | 'error'
 
-interface ImportItem {
+interface FileImportItem {
+  kind: 'file'
   key: string
   file: File
   tableName: string
@@ -19,10 +22,40 @@ interface ImportItem {
   error?: string
 }
 
+interface UrlImportItem {
+  kind: 'url'
+  key: string
+  url: string
+  tableName: string
+  status: Status
+  rowCount?: number
+  error?: string
+}
+
+type ImportItem = FileImportItem | UrlImportItem
+
 const items = ref<ImportItem[]>([])
 const isDragOver = ref(false)
 const isProcessing = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// URL import state
+const urlInput = ref('')
+const urlTableName = ref('')
+const urlError = ref('')
+
+// Auto-derive table name from URL path, but only when the user hasn't manually typed a name
+const urlNameUserEdited = ref<boolean>(false)
+watch(urlInput, (val) => {
+  if (urlNameUserEdited.value) return
+  try {
+    const urlPath = new URL(val).pathname
+    const base = urlPath.split('/').pop()?.replace(/\.[^.]+$/, '') || ''
+    urlTableName.value = base ? sanitize(base) : ''
+  } catch {
+    urlTableName.value = ''
+  }
+})
 
 // ── Name helpers ──────────────────────────────────────────────────────────────
 
@@ -39,7 +72,7 @@ function sanitize(filename: string): string {
 function uniqueName(base: string): string {
   // Check against both the store AND any names already queued in this session
   const taken = new Set([
-    ...schemaStore.tables.map((t) => t.name),
+    ...schemaStore.nodes.map((n) => n.name),
     ...items.value.map((i) => i.tableName),
   ])
   if (!taken.has(base)) return base
@@ -51,43 +84,45 @@ function uniqueName(base: string): string {
 // ── Canvas positioning ────────────────────────────────────────────────────────
 
 function nextPosition(): { x: number; y: number } {
-  if (!schemaStore.tables.length) return { x: 60, y: 80 }
-  // Place to the right of whatever is furthest right at the moment of insertion
-  const maxX = Math.max(...schemaStore.tables.map((t) => t.x))
-  const anchor = schemaStore.tables.find((t) => t.x === maxX)!
+  if (!schemaStore.nodes.length) return { x: 60, y: 80 }
+  const maxX = Math.max(...schemaStore.nodes.map((n) => n.x))
+  const anchor = schemaStore.nodes.find((n) => n.x === maxX)!
   return { x: maxX + 280, y: anchor.y }
 }
 
 // ── Processing ────────────────────────────────────────────────────────────────
 
-async function processItem(item: ImportItem) {
+function readFnForExt(fileName: string): string {
+  if (/\.parquet$/i.test(fileName)) return `read_parquet('${fileName.replace(/'/g, "''")}')`
+  if (/\.json(l)?$/i.test(fileName)) return `read_json_auto('${fileName.replace(/'/g, "''")}')`
+  return `read_csv_auto('${fileName.replace(/'/g, "''")}', header = true, sample_size = -1)`
+}
+
+async function finalizeTable(item: ImportItem, fileName: string) {
+  const safeTable = item.tableName.replace(/"/g, '""')
+  await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFnForExt(fileName)}`)
+
+  const [columns, countResult] = await Promise.all([
+    getTableInfo(item.tableName),
+    query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
+  ])
+
+  const rowCount = Number(countResult.rows[0]?.n ?? 0)
+  const { x, y } = nextPosition()
+  schemaStore.addTable({ id: item.tableName, name: item.tableName, x, y, columns })
+  schemaStore.setRowCount(item.tableName, rowCount)
+
+  item.rowCount = rowCount
+  item.status = 'done'
+  await saveTable(item.tableName).catch(console.warn)
+}
+
+async function processItem(item: FileImportItem) {
   item.status = 'processing'
   try {
     const buffer = await item.file.arrayBuffer()
     await registerFile(item.file.name, new Uint8Array(buffer))
-
-    const safeFile  = item.file.name.replace(/'/g, "''")
-    const safeTable = item.tableName.replace(/"/g, '""')
-
-    // sample_size=-1 scans the whole file so DuckDB infers types correctly on
-    // skewed data (e.g. a column that's NULL for the first 100 rows)
-    await exec(
-      `CREATE TABLE "${safeTable}" AS ` +
-      `SELECT * FROM read_csv_auto('${safeFile}', header = true, sample_size = -1)`,
-    )
-
-    const [columns, countResult] = await Promise.all([
-      getTableInfo(item.tableName),
-      query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
-    ])
-
-    const rowCount = Number(countResult.rows[0]?.n ?? 0)
-    const { x, y } = nextPosition()
-    schemaStore.addTable({ id: item.tableName, name: item.tableName, x, y, columns })
-    schemaStore.setRowCount(item.tableName, rowCount)
-
-    item.rowCount = rowCount
-    item.status = 'done'
+    await finalizeTable(item, item.file.name)
   } catch (e) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
@@ -96,9 +131,30 @@ async function processItem(item: ImportItem) {
   }
 }
 
+async function processUrlItem(item: UrlImportItem) {
+  item.status = 'processing'
+  // derive a filename from the URL path for DuckDB to detect format
+  const urlPath = new URL(item.url).pathname
+  const baseName = urlPath.split('/').pop() || 'import'
+  const fileName = `__url_${item.tableName}_${baseName}`
+  try {
+    const response = await fetch(item.url)
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    const buffer = new Uint8Array(await response.arrayBuffer())
+    await registerFile(fileName, buffer)
+    await finalizeTable(item, fileName)
+  } catch (e) {
+    item.status = 'error'
+    item.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    await dropFile(fileName)
+  }
+}
+
 async function enqueue(files: File[]) {
-  const newItems: ImportItem[] = files.map((file) => ({
-    key: `${file.name}-${Math.random().toString(36).slice(2)}`,
+  const newItems: FileImportItem[] = files.map((file) => ({
+    kind: 'file' as const,
+    key: `${file.name}-${Date.now()}`,
     file,
     tableName: uniqueName(sanitize(file.name)),
     status: 'queued' as Status,
@@ -108,9 +164,50 @@ async function enqueue(files: File[]) {
 
   if (!isProcessing.value) {
     isProcessing.value = true
-    // Process the whole outstanding queue sequentially
     for (const item of items.value.filter((i) => i.status === 'queued')) {
-      await processItem(item)
+      if (item.kind === 'file') await processItem(item)
+      else await processUrlItem(item)
+    }
+    isProcessing.value = false
+  }
+}
+
+async function enqueueUrl() {
+  const raw = urlInput.value.trim()
+  urlError.value = ''
+  if (!raw) return
+  try {
+    new URL(raw)
+  } catch {
+    urlError.value = 'Enter a valid URL'
+    return
+  }
+
+  const nameBase = urlTableName.value.trim()
+  if (!nameBase) {
+    urlError.value = 'Enter a table name'
+    return
+  }
+
+  const newItem: UrlImportItem = {
+    kind: 'url',
+    key: `url-${Date.now()}`,
+    url: raw,
+    tableName: uniqueName(sanitize(nameBase)),
+    status: 'queued',
+  }
+
+  // Reset form
+  urlInput.value = ''
+  urlTableName.value = ''
+  urlNameUserEdited.value = false
+  items.value.push(newItem)
+
+  if (!isProcessing.value) {
+    isProcessing.value = true
+    for (const item of items.value.filter((i) => i.status === 'queued')) {
+      if (item.kind === 'file') await processItem(item)
+      else await processUrlItem(item)
     }
     isProcessing.value = false
   }
@@ -189,7 +286,7 @@ function fmtSize(bytes: number) {
             <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
-          Import CSV
+          Import Data
         </div>
         <button
           class="close-btn"
@@ -233,8 +330,42 @@ function fmtSize(bytes: number) {
           {{ isDragOver ? 'Release to import' : 'Drop CSV files here' }}
         </p>
         <p class="drop-secondary">
-          or <span class="browse-link">browse files</span> &nbsp;·&nbsp; .csv .tsv .txt
+          or <span class="browse-link">browse files</span> &nbsp;·&nbsp; .csv .tsv .txt .parquet .json
         </p>
+      </div>
+
+      <!-- URL import -->
+      <div class="url-section">
+        <form @submit.prevent="enqueueUrl">
+          <div class="url-row">
+            <svg class="url-icon" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M1.5 8h13M8 1.5C6.5 3.5 5.5 5.6 5.5 8s1 4.5 2.5 6.5M8 1.5C9.5 3.5 10.5 5.6 10.5 8s-1 4.5-2.5 6.5" stroke="currentColor" stroke-width="1.3"/>
+            </svg>
+            <input
+              v-model="urlInput"
+              type="url"
+              class="url-input"
+              placeholder="https://example.com/data.csv"
+              :disabled="isProcessing"
+            />
+          </div>
+          <div class="url-name-row">
+            <span class="url-name-label">Table name</span>
+            <input
+              v-model="urlTableName"
+              type="text"
+              class="url-name-input"
+              placeholder="my_table"
+              :disabled="isProcessing"
+              @input="urlNameUserEdited = true"
+            />
+            <button type="submit" class="url-btn" :disabled="isProcessing || !urlInput.trim() || !urlTableName.trim()">
+              Import
+            </button>
+          </div>
+        </form>
+        <p v-if="urlError" class="url-error">{{ urlError }}</p>
       </div>
 
       <!-- File list -->
@@ -266,12 +397,15 @@ function fmtSize(bytes: number) {
           <!-- File info -->
           <div class="file-info">
             <div class="file-names">
-              <span class="file-original">{{ item.file.name }}</span>
+              <span class="file-original">
+                {{ item.kind === 'file' ? item.file.name : item.url }}
+              </span>
               <span class="file-arrow">→</span>
               <span class="file-table">{{ item.tableName }}</span>
             </div>
             <div class="file-meta">
-              <span class="file-size">{{ fmtSize(item.file.size) }}</span>
+              <span v-if="item.kind === 'file'" class="file-size">{{ fmtSize(item.file.size) }}</span>
+              <span v-else class="file-size url-label">URL</span>
               <template v-if="item.status === 'processing'">
                 <span class="file-progress">Importing…</span>
               </template>
@@ -614,6 +748,111 @@ function fmtSize(bytes: number) {
 
 .footer-btn.primary:hover {
   background: var(--accent-hover);
+}
+
+/* ── URL import ──────────────────────────────────────────────────────────── */
+.url-section {
+  padding: 0 16px 12px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.url-row,
+.url-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+  transition: border-color 0.15s;
+}
+
+.url-row:focus-within,
+.url-name-row:focus-within {
+  border-color: var(--accent);
+}
+
+.url-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.url-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.url-input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans, sans-serif);
+}
+
+.url-name-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.url-name-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.url-name-input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans, sans-serif);
+}
+
+.url-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #0d1117;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.url-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.url-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.url-error {
+  font-size: 11.5px;
+  color: var(--error);
+  padding-left: 2px;
+}
+
+.url-label {
+  font-style: italic;
+  color: var(--accent);
 }
 
 /* ── Animations ──────────────────────────────────────────────────────────── */

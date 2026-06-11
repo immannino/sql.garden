@@ -1,13 +1,69 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRegisterSW } from 'virtual:pwa-register/vue'
 import Canvas from './components/Canvas.vue'
 import QueryPanel from './components/QueryPanel.vue'
 import ImportModal from './components/ImportModal.vue'
 import { useDuckDB } from './composables/useDuckDB'
 import { useSchemaStore } from './stores/schema'
+import { usePersistence } from './composables/usePersistence'
+import { useAppReady } from './composables/useAppReady'
 
 const { init, isReady, isLoading, initError, exec } = useDuckDB()
 const schemaStore = useSchemaStore()
+const { loadAll, startAutoSave } = usePersistence()
+const { markAppReady } = useAppReady()
+
+function addQueryNode() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
+  schemaStore.addQueryNode({
+    id: `query_${Date.now()}`,
+    name: `query_${n}`,
+    x: center.x - 140,
+    y: center.y - 80,
+    sql: 'SELECT\n  *\nFROM users\nLIMIT 100',
+  })
+}
+
+function addChartNode() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
+  schemaStore.addChartNode({
+    id: `chart_${Date.now()}`,
+    name: `chart_${n}`,
+    x: center.x - 170,
+    y: center.y - 120,
+    sourceId: null,
+    sql: '',
+    chartType: 'barY',
+    xColumn: '',
+    yColumn: '',
+  })
+}
+
+// PWA update toast
+const { needRefresh, updateServiceWorker } = useRegisterSW()
+
+// PWA install prompt
+const installPrompt = ref<Event | null>(null)
+const showInstall = ref(false)
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  installPrompt.value = e
+  showInstall.value = true
+})
+
+async function installPWA() {
+  if (!installPrompt.value) return
+  ;(installPrompt.value as Event & { prompt(): Promise<void> }).prompt()
+  showInstall.value = false
+  installPrompt.value = null
+}
+
+function dismissUpdate() {
+  needRefresh.value = false
+}
 
 const canvasRef = ref<InstanceType<typeof Canvas> | null>(null)
 const queryPanelRef = ref<InstanceType<typeof QueryPanel> | null>(null)
@@ -132,12 +188,16 @@ const SAMPLE_SCHEMA = [
 onMounted(async () => {
   try {
     await init()
-    await exec(SEED_SQL)
-    for (const table of SAMPLE_SCHEMA) {
-      schemaStore.addTable(table)
+    const restored = await loadAll()
+    if (!restored) {
+      await exec(SEED_SQL)
+      for (const table of SAMPLE_SCHEMA) {
+        schemaStore.addTable(table)
+      }
     }
-    // Populate initial row counts on cards
     await queryPanelRef.value?.refreshStats()
+    startAutoSave()
+    markAppReady()
   } catch {
     // initError already set by useDuckDB
   }
@@ -150,12 +210,7 @@ onMounted(async () => {
     <header class="toolbar">
       <div class="toolbar-left">
         <span class="logo">
-          <svg viewBox="0 0 20 20" fill="none">
-            <circle cx="10" cy="10" r="8" stroke="#58a6ff" stroke-width="1.5"/>
-            <ellipse cx="10" cy="10" rx="4" ry="8" stroke="#58a6ff" stroke-width="1.5"/>
-            <line x1="2" y1="10" x2="18" y2="10" stroke="#58a6ff" stroke-width="1.5"/>
-          </svg>
-          sql.garden
+          🌱 sql.garden
         </span>
       </div>
 
@@ -169,6 +224,38 @@ onMounted(async () => {
       </div>
 
       <div class="toolbar-right">
+        <button class="toolbar-btn" :disabled="!isReady" title="Add a query node to the canvas" @click="addQueryNode">
+          <svg viewBox="0 0 16 16" fill="none">
+            <polyline points="2,5 6,9 2,13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="8" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="8" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="8" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Query
+        </button>
+
+        <button class="toolbar-btn" :disabled="!isReady" title="Add a chart node to the canvas" @click="addChartNode">
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/>
+            <polyline points="3,11 6,6 9,9 13,4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Chart
+        </button>
+
+        <div class="toolbar-divider" />
+
+        <button
+          v-if="showInstall"
+          class="toolbar-btn install-btn"
+          @click="installPWA"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Install app
+        </button>
+
         <button
           class="toolbar-btn"
           :disabled="!isReady"
@@ -216,11 +303,18 @@ onMounted(async () => {
     <!-- Main content -->
     <div class="main-area">
       <Canvas ref="canvasRef" />
-      <QueryPanel v-if="showQuery" ref="queryPanelRef" />
+      <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" />
     </div>
 
     <!-- Import modal -->
     <ImportModal v-if="showImport" @close="showImport = false" />
+
+    <!-- PWA update toast -->
+    <div v-if="needRefresh" class="pwa-toast">
+      <span>A new version is available.</span>
+      <button class="pwa-toast-btn" @click="updateServiceWorker()">Update</button>
+      <button class="pwa-toast-dismiss" @click="dismissUpdate">✕</button>
+    </div>
 
     <!-- Init error overlay -->
     <div v-if="initError" class="error-overlay">
@@ -418,5 +512,55 @@ onMounted(async () => {
 
 .error-hint a {
   color: var(--accent);
+}
+
+.install-btn {
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.25);
+}
+
+.pwa-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  z-index: 300;
+}
+
+.pwa-toast-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #0d1117;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pwa-toast-btn:hover {
+  background: var(--accent-hover);
+}
+
+.pwa-toast-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.pwa-toast-dismiss:hover {
+  color: var(--text-primary);
 }
 </style>

@@ -107,6 +107,39 @@ async function getTableInfo(tableName: string): Promise<Column[]> {
   }))
 }
 
+async function copyTableToBuffer(tableName: string): Promise<Uint8Array> {
+  if (!_db) throw new Error('DuckDB not ready')
+  const safe = tableName.replace(/"/g, '""')
+  const fileName = `__export_${tableName}.parquet`
+  const conn = await _db.connect()
+  try {
+    await conn.query(`COPY "${safe}" TO '${fileName}' (FORMAT PARQUET)`)
+  } finally {
+    await conn.close()
+  }
+  const buffer = await _db.copyFileToBuffer(fileName)
+  await _db.dropFile(fileName)
+  return buffer
+}
+
+const _loadedExtensions = new Set<string>()
+
+async function loadExtension(name: string): Promise<void> {
+  if (_loadedExtensions.has(name)) return
+  try {
+    await exec(`LOAD '${name}'`)
+  } catch {
+    await exec(`INSTALL '${name}'`)
+    await exec(`LOAD '${name}'`)
+  }
+  _loadedExtensions.add(name)
+}
+
 export function useDuckDB() {
-  return { isReady, isLoading, initError, init, query, exec, getTableInfo, registerFile, dropFile }
+  return {
+    isReady, isLoading, initError,
+    init, query, exec, getTableInfo,
+    registerFile, dropFile,
+    copyTableToBuffer, loadExtension,
+  }
 }
