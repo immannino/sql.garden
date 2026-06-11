@@ -15,7 +15,7 @@ const emit = defineEmits<{
 
 const schemaStore = useSchemaStore()
 const { query } = useDuckDB()
-const { results: queryResults } = useQueryResults()
+const { results: queryResults, setResult } = useQueryResults()
 const { isAppReady } = useAppReady()
 
 // ── Drag ──────────────────────────────────────────────────────────────────────
@@ -112,6 +112,37 @@ async function runInline(e?: MouseEvent) {
   }
 }
 
+async function runLinked() {
+  const sid = props.node.sourceId
+  if (!sid || isRunningInline.value) return
+  const sourceNode = schemaStore.nodes.find((n) => n.id === sid && n.kind === 'query')
+  if (!sourceNode || sourceNode.kind !== 'query') return
+  const sql = sourceNode.sql.trim()
+  if (!sql) return
+  isRunningInline.value = true
+  setResult(sid, { columns: [], rows: [], error: null, isRunning: true })
+  try {
+    const result = await query(sql)
+    setResult(sid, { columns: result.columns, rows: result.rows, error: null, isRunning: false })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    setResult(sid, { columns: [], rows: [], error: msg, isRunning: false })
+  } finally {
+    isRunningInline.value = false
+  }
+}
+
+function createQuery() {
+  const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
+  schemaStore.addQueryNode({
+    id: `query_${Date.now()}`,
+    name: `query_${n}`,
+    x: props.node.x + (props.node.w ?? 340) + 40,
+    y: props.node.y,
+    sql: props.node.sql,
+  })
+}
+
 function onInlineSqlKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runInline() }
 }
@@ -173,7 +204,14 @@ watchEffect(() => {
 })
 
 onMounted(() => {
-  if (props.node.sourceId || !props.node.sql.trim()) return
+  if (props.node.sourceId) {
+    // Auto-run linked query if no cached result yet
+    if (queryResults[props.node.sourceId]) return
+    if (isAppReady.value) { runLinked(); return }
+    const stop = watch(isAppReady, (ready) => { if (ready) { stop(); runLinked() } })
+    return
+  }
+  if (!props.node.sql.trim()) return
   if (isAppReady.value) { runInline(); return }
   const stop = watch(isAppReady, (ready) => { if (ready) { stop(); runInline() } })
 })
@@ -251,6 +289,15 @@ onUnmounted(() => {
         <div class="inline-sql-footer">
           <span v-if="inlineError" class="inline-error" :title="inlineError">{{ inlineError.split('\n')[0] }}</span>
           <span v-else class="inline-hint">⌘↵ to run</span>
+          <button v-if="localSql.trim()" class="ghost-btn" title="Create a QueryCard with this SQL" @click.stop="createQuery">
+            <svg viewBox="0 0 10 10" fill="none">
+              <polyline points="1,3 3,5 1,7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              <line x1="4" y1="2" x2="9" y2="2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="4" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="4" y1="8" x2="9" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            Query
+          </button>
           <button class="run-btn" @click.stop="runInline">
             <svg v-if="!isRunningInline" viewBox="0 0 10 10" fill="none">
               <path d="M2 1.5l7 3.5-7 3.5V1.5z" fill="currentColor"/>
@@ -263,20 +310,30 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Source-linked: show query status -->
+      <!-- Source-linked: show query status + refresh -->
       <div v-else-if="node.sourceId" class="source-status">
         <template v-if="queryResults[node.sourceId]?.isRunning">
           <span class="source-running">Running query…</span>
         </template>
         <template v-else-if="queryResults[node.sourceId]?.error">
-          <span class="source-error">Query error</span>
+          <span class="source-error">{{ queryResults[node.sourceId].error!.split('\n')[0] }}</span>
         </template>
         <template v-else-if="!queryResults[node.sourceId]">
-          <span class="source-hint">Run the query node to load data</span>
+          <span class="source-hint">Loading…</span>
         </template>
         <template v-else>
           <span class="source-ok">{{ queryResults[node.sourceId].rows.length.toLocaleString() }} rows</span>
         </template>
+        <button class="run-btn" :disabled="isRunningInline" @click.stop="runLinked">
+          <svg v-if="!isRunningInline" viewBox="0 0 10 10" fill="none">
+            <path d="M1 5A4 4 0 1 1 5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <polyline points="1,2 1,5 4,5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <svg v-else class="spin" viewBox="0 0 12 12" fill="none">
+            <circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="2" stroke-dasharray="8 14" stroke-linecap="round"/>
+          </svg>
+          Refresh
+        </button>
       </div>
 
       <!-- Chart type -->
@@ -556,7 +613,27 @@ onUnmounted(() => {
 }
 
 .run-btn svg { width: 9px; height: 9px; }
-.run-btn:hover { background: var(--accent-hover); }
+.run-btn:hover:not(:disabled) { background: var(--accent-hover); }
+.run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ghost-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.ghost-btn svg { width: 9px; height: 9px; }
+.ghost-btn:hover { background: var(--surface-3, var(--surface-2)); color: var(--text-primary); }
 
 /* ── Chart area ──────────────────────────────────────────────────────────── */
 .chart-area {

@@ -50,7 +50,19 @@ export interface ChartNode {
   h?: number
 }
 
-export type CanvasNode = TableNode | QueryNode | ChartNode
+export interface MarkdownNode {
+  kind: 'markdown'
+  id: string
+  name: string
+  x: number
+  y: number
+  content: string
+  color: string
+  w?: number
+  h?: number
+}
+
+export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode
 
 const PALETTE = [
   '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
@@ -76,6 +88,10 @@ export const useSchemaStore = defineStore('schema', () => {
 
   function addChartNode(node: Omit<ChartNode, 'kind' | 'color'> & { color?: string }) {
     nodes.value.push({ kind: 'chart', ...node, color: nextColor(node.color) })
+  }
+
+  function addMarkdownNode(node: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string }) {
+    nodes.value.push({ kind: 'markdown', ...node, color: nextColor(node.color) })
   }
 
   function updatePosition(id: string, x: number, y: number) {
@@ -107,6 +123,11 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'chart') Object.assign(n, updates)
   }
 
+  function updateMarkdownContent(id: string, content: string) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'markdown') n.content = content
+  }
+
   function updateNodeSize(id: string, w: number, h: number) {
     const n = nodes.value.find((n) => n.id === id)
     if (!n) return
@@ -125,9 +146,9 @@ export const useSchemaStore = defineStore('schema', () => {
 
   return {
     nodes,
-    addTable, addQueryNode, addChartNode,
+    addTable, addQueryNode, addChartNode, addMarkdownNode,
     updatePosition, updateNodeSize, removeNode, renameNode,
-    setRowCount, updateQuerySql, updateChartConfig,
+    setRowCount, updateQuerySql, updateChartConfig, updateMarkdownContent,
     setColorCursor, clear,
   }
 })

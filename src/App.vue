@@ -42,6 +42,45 @@ function addChartNode() {
   })
 }
 
+function addMarkdownNode() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const n = schemaStore.nodes.filter((n) => n.kind === 'markdown').length + 1
+  schemaStore.addMarkdownNode({
+    id: `md_${Date.now()}`,
+    name: `note_${n}`,
+    x: center.x - 150,
+    y: center.y - 100,
+    content: '',
+  })
+}
+
+function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
+  const center = canvasRef.value?.getCenter() ?? { x: 300, y: 300 }
+  if (payload.type === 'query') {
+    const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
+    schemaStore.addQueryNode({
+      id: `query_${Date.now()}`,
+      name: `query_${n}`,
+      x: center.x - 140,
+      y: center.y - 80,
+      sql: payload.sql,
+    })
+  } else {
+    const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
+    schemaStore.addChartNode({
+      id: `chart_${Date.now()}`,
+      name: `chart_${n}`,
+      x: center.x - 170,
+      y: center.y - 120,
+      sourceId: null,
+      sql: payload.sql,
+      chartType: 'barY',
+      xColumn: '',
+      yColumn: '',
+    })
+  }
+}
+
 // PWA update toast
 const { needRefresh, updateServiceWorker } = useRegisterSW()
 
@@ -242,6 +281,15 @@ onMounted(async () => {
           Chart
         </button>
 
+        <button class="toolbar-btn" title="Add a markdown note to the canvas" @click="addMarkdownNode">
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="4" y1="6" x2="12" y2="6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="4" y1="9" x2="9" y2="9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          Note
+        </button>
+
         <div class="toolbar-divider" />
 
         <button
@@ -303,7 +351,7 @@ onMounted(async () => {
     <!-- Main content -->
     <div class="main-area">
       <Canvas ref="canvasRef" />
-      <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" />
+      <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
     </div>
 
     <!-- Import modal -->

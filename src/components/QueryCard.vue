@@ -79,6 +79,92 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
   emit('resizeStart', { id: props.node.id, mouseX: e.clientX, mouseY: e.clientY, startW: props.node.w ?? DEFAULT_W, startH: props.node.h ?? DEFAULT_H, direction })
 }
 
+// ── Create chart ───────────────────────────────────────────────────────────────
+function createChart() {
+  const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
+  schemaStore.addChartNode({
+    id: `chart_${Date.now()}`,
+    name: `chart_${n}`,
+    x: props.node.x + (props.node.w ?? DEFAULT_W) + 40,
+    y: props.node.y,
+    sourceId: props.node.id,
+    sql: '',
+    chartType: 'barY',
+    xColumn: '',
+    yColumn: '',
+  })
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────────
+const hasLimitInSql = computed(() => /\bLIMIT\b/i.test(localSql.value))
+const exportPending = ref<'csv' | 'tsv' | 'json' | 'md' | null>(null)
+const isExporting = ref(false)
+const exportError = ref<string | null>(null)
+
+function onExportClick(fmt: 'csv' | 'tsv' | 'json' | 'md') {
+  exportError.value = null
+  const r = nodeResult.value
+  if (!r || r.isRunning || r.error) return
+  if (hasLimitInSql.value) {
+    exportPending.value = fmt
+    return
+  }
+  doExport(fmt, r.columns, r.rows as Record<string, unknown>[])
+}
+
+function doExport(fmt: string, columns: string[], rows: Record<string, unknown>[]) {
+  let content: string
+  let mimeType: string
+  let ext: string
+
+  if (fmt === 'csv') {
+    const esc = (v: unknown) => {
+      const s = v === null || v === undefined ? '' : String(v)
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    content = [columns.join(','), ...rows.map((r) => columns.map((c) => esc(r[c])).join(','))].join('\n')
+    mimeType = 'text/csv'; ext = 'csv'
+  } else if (fmt === 'tsv') {
+    content = [columns.join('\t'), ...rows.map((r) => columns.map((c) => String(r[c] ?? '')).join('\t'))].join('\n')
+    mimeType = 'text/tab-separated-values'; ext = 'tsv'
+  } else if (fmt === 'json') {
+    content = JSON.stringify(rows, null, 2)
+    mimeType = 'application/json'; ext = 'json'
+  } else {
+    const sep = '| ' + columns.map(() => '---').join(' | ') + ' |'
+    const header = '| ' + columns.join(' | ') + ' |'
+    const body = rows.map((r) => '| ' + columns.map((c) => String(r[c] ?? '')).join(' | ') + ' |').join('\n')
+    content = [header, sep, body].join('\n')
+    mimeType = 'text/plain'; ext = 'md'
+  }
+
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${props.node.name}.${ext}`
+  a.click()
+  URL.revokeObjectURL(url)
+  exportPending.value = null
+}
+
+async function exportWithoutLimit() {
+  const fmt = exportPending.value
+  if (!fmt) return
+  const stripped = localSql.value.replace(/\bLIMIT\s+\d+(\s*,\s*\d+)?\b/gi, '').replace(/;?\s*$/, '')
+  exportPending.value = null
+  isExporting.value = true
+  exportError.value = null
+  try {
+    const result = await query(stripped)
+    doExport(fmt, result.columns, result.rows as Record<string, unknown>[])
+  } catch (err) {
+    exportError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    isExporting.value = false
+  }
+}
+
 // ── SQL editing ────────────────────────────────────────────────────────────────
 const localSql = ref(props.node.sql)
 let sqlTimer: ReturnType<typeof setTimeout> | null = null
@@ -201,6 +287,24 @@ onMounted(() => {
 
     <!-- Results -->
     <div v-show="activeTab === 'results'" class="card-results" :style="{ height: `${node.h ?? 84}px` }" @mousedown.stop>
+      <!-- Export bar -->
+      <div v-if="nodeResult && !nodeResult.isRunning && !nodeResult.error" class="export-bar">
+        <span class="export-count">{{ nodeResult.rows.length.toLocaleString() }} rows</span>
+        <span v-if="hasLimitInSql" class="export-limit-warn" title="SQL has a LIMIT — result may be partial">⚠ LIMIT</span>
+        <template v-if="!exportPending && !isExporting">
+          <button v-for="fmt in (['csv','tsv','json','md'] as const)" :key="fmt" class="export-fmt-btn" @click.stop="onExportClick(fmt)">{{ fmt.toUpperCase() }}</button>
+        </template>
+        <span v-else-if="isExporting" class="export-status">Exporting…</span>
+      </div>
+      <!-- Limit confirmation -->
+      <div v-if="exportPending" class="export-confirm" @mousedown.stop>
+        <span>{{ nodeResult?.rows.length }} rows (limited). Export anyway?</span>
+        <button class="export-confirm-btn" @click.stop="doExport(exportPending, nodeResult!.columns, nodeResult!.rows as Record<string, unknown>[])">Export {{ nodeResult?.rows.length }}</button>
+        <button class="export-confirm-btn accent" @click.stop="exportWithoutLimit">Re-run without LIMIT</button>
+        <button class="export-dismiss" @click.stop="exportPending = null">✕</button>
+      </div>
+      <div v-if="exportError" class="export-error-msg" @mousedown.stop>{{ exportError }} <button @click.stop="exportError = null">✕</button></div>
+
       <template v-if="nodeResult && !nodeResult.isRunning && !nodeResult.error && nodeResult.rows.length">
         <div class="results-scroll">
           <table class="mini-table">
@@ -232,6 +336,13 @@ onMounted(() => {
         <span v-else-if="runSummary" class="status-ok">{{ runSummary }}</span>
         <span v-else class="status-hint">⌘↵ to run</span>
       </span>
+      <button class="ghost-btn" title="Create a ChartCard linked to this query" @mousedown.stop @click.stop="createChart">
+        <svg viewBox="0 0 10 10" fill="none">
+          <rect x="0.5" y="0.5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+          <polyline points="2,7 4,4 6,6 8,3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Chart
+      </button>
       <button
         class="run-btn"
         :class="{ running: isRunning }"
@@ -559,6 +670,142 @@ onMounted(() => {
 .run-btn svg { width: 10px; height: 10px; }
 .run-btn:hover { background: var(--accent-hover); }
 .run-btn.running { opacity: 0.7; cursor: not-allowed; }
+
+.ghost-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.ghost-btn svg { width: 9px; height: 9px; }
+.ghost-btn:hover { color: var(--text-primary); background: var(--surface-0); }
+
+/* ── Export bar ──────────────────────────────────────────────────────────── */
+.export-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  flex-shrink: 0;
+}
+
+.export-count {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.export-limit-warn {
+  font-size: 9.5px;
+  color: #f59e0b;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.export-fmt-btn {
+  padding: 1px 5px;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+.export-fmt-btn:hover { background: var(--accent); color: #0d1117; border-color: var(--accent); }
+
+.export-status {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  flex: 1;
+  text-align: right;
+}
+
+.export-confirm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid #f59e0b40;
+  background: rgba(245, 158, 11, 0.06);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.export-confirm span {
+  font-size: 10px;
+  color: #f59e0b;
+  flex: 1;
+  min-width: 100%;
+  margin-bottom: 2px;
+}
+
+.export-confirm-btn {
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.export-confirm-btn:hover { background: var(--surface-0); color: var(--text-primary); }
+.export-confirm-btn.accent { background: var(--accent); color: #0d1117; border-color: transparent; }
+.export-confirm-btn.accent:hover { background: var(--accent-hover); }
+
+.export-dismiss {
+  padding: 2px 5px;
+  font-size: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.1s;
+}
+
+.export-dismiss:hover { color: var(--text-primary); }
+
+.export-error-msg {
+  padding: 3px 8px;
+  font-size: 10px;
+  color: var(--error);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.export-error-msg button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+}
 
 .spin { animation: spin 0.8s linear infinite; }
 

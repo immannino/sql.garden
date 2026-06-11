@@ -149,7 +149,10 @@ function isNull(val: unknown): boolean {
 }
 
 // ── Panel resize ──────────────────────────────────────────────────────────────
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{
+  close: []
+  create: [{ type: 'query' | 'chart'; sql: string }]
+}>()
 const panelWidth = ref(420)
 
 function onResizeHandleMouseDown(e: MouseEvent) {
@@ -254,6 +257,24 @@ defineExpose({ refreshStats })
               {{ result.rowCount.toLocaleString() }} {{ result.rowCount === 1 ? 'row' : 'rows' }}
             </span>
             <span class="meta-time">{{ result.durationMs.toFixed(1) }}ms</span>
+            <div class="meta-actions">
+              <button class="create-btn" title="Create a QueryCard on the canvas with this SQL" @click="emit('create', { type: 'query', sql: sql })">
+                <svg viewBox="0 0 12 12" fill="none">
+                  <polyline points="1,3.5 4,6.5 1,9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="5.5" y1="2.5" x2="11" y2="2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <line x1="5.5" y1="6" x2="11" y2="6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                  <line x1="5.5" y1="9.5" x2="11" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                </svg>
+                Query node
+              </button>
+              <button class="create-btn" title="Create a ChartCard on the canvas with this SQL" @click="emit('create', { type: 'chart', sql: sql })">
+                <svg viewBox="0 0 12 12" fill="none">
+                  <rect x="0.5" y="0.5" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
+                  <polyline points="2,9 4,5.5 6,7 9,3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Chart node
+              </button>
+            </div>
           </div>
 
           <div class="table-wrap" v-if="result.rowCount > 0">
@@ -560,6 +581,32 @@ defineExpose({ refreshStats })
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
+
+.meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.create-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+
+.create-btn svg { width: 11px; height: 11px; flex-shrink: 0; }
+.create-btn:hover { color: var(--text-primary); background: var(--surface-1); }
 
 .table-wrap {
   flex: 1;

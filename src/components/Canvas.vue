@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import TableCard from './TableCard.vue'
 import QueryCard from './QueryCard.vue'
 import ChartCard from './ChartCard.vue'
+import MarkdownCard from './MarkdownCard.vue'
 import { useSchemaStore } from '../stores/schema'
 
 const schemaStore = useSchemaStore()
@@ -182,6 +183,13 @@ onUnmounted(() => {
         />
         <ChartCard
           v-else-if="node.kind === 'chart'"
+          :node="node"
+          :selected="selectedId === node.id"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <MarkdownCard
+          v-else-if="node.kind === 'markdown'"
           :node="node"
           :selected="selectedId === node.id"
           @drag-start="onCardDragStart"

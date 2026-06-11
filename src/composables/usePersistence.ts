@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { useDuckDB } from './useDuckDB'
 import { useSchemaStore } from '../stores/schema'
-import type { Column, ChartNode } from '../stores/schema'
+import type { Column, ChartNode, MarkdownNode } from '../stores/schema'
 
 const CANVAS_KEY = 'sql-garden:canvas:v1'
 const IDB_NAME = 'sql-garden'
@@ -67,6 +67,10 @@ export function usePersistence() {
         const { kind, id, name, x, y, color, sql, w, h } = node
         return { kind, id, name, x, y, color, sql, w, h }
       }
+      if (node.kind === 'markdown') {
+        const { kind, id, name, x, y, color, content, w, h } = node
+        return { kind, id, name, x, y, color, content, w, h }
+      }
       // chart
       const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, w, h } = node
       return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, w, h }
@@ -115,6 +119,12 @@ export function usePersistence() {
           // They do NOT count toward tablesRestored so a chart-only canvas
           // still triggers the seed (the seed tables will coexist with them).
           schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, w: entry.w, h: entry.h })
+        } else if (kind === 'markdown') {
+          const m: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string } = {
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
+            content: entry.content ?? '', w: entry.w, h: entry.h,
+          }
+          schemaStore.addMarkdownNode(m)
         } else if (kind === 'chart') {
           const c: Omit<ChartNode, 'kind' | 'color'> & { color?: string } = {
             id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
