@@ -13,10 +13,12 @@
     "@observablehq/plot": "^0.6.17",
     "marked": "^18.0.5",
     "pinia": "^3.0.4",
+    "sql.js": "^1.14.1",
     "vue": "^3.5.34"
   },
   "devDependencies": {
     "@types/node": "^24.12.3",
+    "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.2",

@@ -30,6 +30,8 @@ async function init(): Promise<void> {
       await _db.instantiate(bundle.mainModule, bundle.pthreadWorker)
       URL.revokeObjectURL(workerUrl)
       isReady.value = true
+      // Pre-load httpfs so remote URLs work in QueryCard and ImportModal without setup.
+      loadExtension('httpfs').catch(() => {})
     } catch (e) {
       initError.value = e instanceof Error ? e.message : String(e)
       _initPromise = null

@@ -4,6 +4,7 @@ import { useRegisterSW } from 'virtual:pwa-register/vue'
 import Canvas from './components/Canvas.vue'
 import QueryPanel from './components/QueryPanel.vue'
 import ImportModal from './components/ImportModal.vue'
+import Sidebar from './components/Sidebar.vue'
 import { useDuckDB } from './composables/useDuckDB'
 import { useSchemaStore } from './stores/schema'
 import { usePersistence } from './composables/usePersistence'
@@ -107,7 +108,39 @@ function dismissUpdate() {
 const canvasRef = ref<InstanceType<typeof Canvas> | null>(null)
 const queryPanelRef = ref<InstanceType<typeof QueryPanel> | null>(null)
 const showQuery = ref(true)
+const showSidebar = ref(true)
 const showImport = ref(false)
+const isDragOverMain = ref(false)
+const initialFilesForModal = ref<File[]>([])
+
+const DROPPABLE = /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i
+
+function onMainDragOver(e: DragEvent) {
+  if (showImport.value || !isReady.value) return
+  if (Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file')) {
+    e.preventDefault()
+    isDragOverMain.value = true
+  }
+}
+
+function onMainDragLeave(e: DragEvent) {
+  if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null))
+    isDragOverMain.value = false
+}
+
+function onMainDrop(e: DragEvent) {
+  isDragOverMain.value = false
+  if (showImport.value || !isReady.value) return
+  e.preventDefault()
+  const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => DROPPABLE.test(f.name))
+  if (!files.length) return
+  initialFilesForModal.value = files
+  showImport.value = true
+}
+
+function onFocusNode(id: string) {
+  canvasRef.value?.focusNode(id)
+}
 
 // Sample e-commerce schema seeded into DuckDB at startup
 const SEED_SQL = `
@@ -251,6 +284,23 @@ onMounted(async () => {
         <span class="logo">
           🌱 sql.garden
         </span>
+
+        <div class="toolbar-divider" />
+
+        <button
+          class="toolbar-btn"
+          :class="{ active: showSidebar }"
+          title="Toggle layers panel"
+          @click="showSidebar = !showSidebar"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="5" height="14" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="9" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="12" x2="12" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          Layers
+        </button>
       </div>
 
       <div class="toolbar-center">
@@ -313,7 +363,7 @@ onMounted(async () => {
             <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
-          Import CSV
+          Import
         </button>
 
         <div class="toolbar-divider" />
@@ -349,13 +399,37 @@ onMounted(async () => {
     </header>
 
     <!-- Main content -->
-    <div class="main-area">
+    <div
+      class="main-area"
+      :class="{ 'drag-active': isDragOverMain }"
+      @dragover="onMainDragOver"
+      @dragleave="onMainDragLeave"
+      @drop="onMainDrop"
+    >
+      <Sidebar v-if="showSidebar" @focus-node="onFocusNode" />
       <Canvas ref="canvasRef" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
+
+      <!-- Canvas drag-over overlay -->
+      <Transition name="drag-fade">
+        <div v-if="isDragOverMain" class="canvas-drop-overlay">
+          <div class="canvas-drop-hint">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M16 6v14M10 13l6 7 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M5 22v2a2 2 0 002 2h18a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span>Drop to import</span>
+          </div>
+        </div>
+      </Transition>
     </div>
 
     <!-- Import modal -->
-    <ImportModal v-if="showImport" @close="showImport = false" />
+    <ImportModal
+      v-if="showImport"
+      :initial-files="initialFilesForModal"
+      @close="showImport = false; initialFilesForModal = []"
+    />
 
     <!-- PWA update toast -->
     <div v-if="needRefresh" class="pwa-toast">
@@ -517,7 +591,41 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
+
+.main-area.drag-active { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.canvas-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(88, 166, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.canvas-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 40px;
+  background: var(--surface-1);
+  border: 2px solid var(--accent);
+  border-radius: 12px;
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.canvas-drop-hint svg { width: 36px; height: 36px; }
+
+.drag-fade-enter-active, .drag-fade-leave-active { transition: opacity 0.12s ease; }
+.drag-fade-enter-from, .drag-fade-leave-to { opacity: 0; }
 
 .error-overlay {
   position: fixed;

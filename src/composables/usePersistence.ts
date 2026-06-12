@@ -60,20 +60,20 @@ export function usePersistence() {
   function saveCanvas(): void {
     const payload = schemaStore.nodes.map((node) => {
       if (node.kind === 'table') {
-        const { kind, id, name, x, y, color, columns, w, h } = node
-        return { kind, id, name, x, y, color, columns, w, h }
+        const { kind, id, name, x, y, color, columns, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, columns, w, h, viewMode }
       }
       if (node.kind === 'query') {
-        const { kind, id, name, x, y, color, sql, w, h } = node
-        return { kind, id, name, x, y, color, sql, w, h }
+        const { kind, id, name, x, y, color, sql, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, sql, w, h, viewMode }
       }
       if (node.kind === 'markdown') {
-        const { kind, id, name, x, y, color, content, w, h } = node
-        return { kind, id, name, x, y, color, content, w, h }
+        const { kind, id, name, x, y, color, content, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, content, w, h, viewMode }
       }
       // chart
-      const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, w, h } = node
-      return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, w, h }
+      const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode }
     })
     localStorage.setItem(CANVAS_KEY, JSON.stringify(payload))
   }
@@ -111,18 +111,18 @@ export function usePersistence() {
           const rowCount = Number(countResult.rows[0]?.n ?? 0)
           const cols: Column[] = columns
 
-          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, w: entry.w, h: entry.h })
+          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, w: entry.w, h: entry.h, viewMode: entry.viewMode })
           schemaStore.setRowCount(entry.id, rowCount)
           tablesRestored++
         } else if (kind === 'query') {
           // Query/chart nodes have no IDB dependency — always restore them.
           // They do NOT count toward tablesRestored so a chart-only canvas
           // still triggers the seed (the seed tables will coexist with them).
-          schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, w: entry.w, h: entry.h })
+          schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, w: entry.w, h: entry.h, viewMode: entry.viewMode })
         } else if (kind === 'markdown') {
           const m: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string } = {
             id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
-            content: entry.content ?? '', w: entry.w, h: entry.h,
+            content: entry.content ?? '', w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addMarkdownNode(m)
         } else if (kind === 'chart') {
@@ -130,7 +130,8 @@ export function usePersistence() {
             id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
             sourceId: entry.sourceId ?? null, sql: entry.sql ?? '',
             chartType: entry.chartType ?? 'barY', xColumn: entry.xColumn ?? '', yColumn: entry.yColumn ?? '',
-            w: entry.w, h: entry.h,
+            colorColumn: entry.colorColumn, labelColumn: entry.labelColumn,
+            w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addChartNode(c)
         }

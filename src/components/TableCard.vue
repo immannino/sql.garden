@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import type { TableNode } from '../stores/schema'
+import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
 
 const props = defineProps<{ table: TableNode; selected?: boolean }>()
 const emit = defineEmits<{
-  dragStart: [{ id: string; mouseX: number; mouseY: number }]
+  dragStart: [{ id: string; mouseX: number; mouseY: number; shiftKey: boolean }]
   resizeStart: [{ id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }]
 }>()
 
@@ -57,11 +58,19 @@ function onRenameKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') cancelRename()
 }
 
+// ── View mode ─────────────────────────────────────────────────────────────────
+const { updateViewMode } = useSchemaStore()
+const isCollapsed = computed(() => props.table.viewMode === 'collapsed')
+function toggleCollapsed(e: MouseEvent) {
+  e.stopPropagation()
+  updateViewMode(props.table.id, isCollapsed.value ? 'default' : 'collapsed')
+}
+
 // ── Canvas drag ───────────────────────────────────────────────────────────────
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   e.stopPropagation()
-  emit('dragStart', { id: props.table.id, mouseX: e.clientX, mouseY: e.clientY })
+  emit('dragStart', { id: props.table.id, mouseX: e.clientX, mouseY: e.clientY, shiftKey: e.shiftKey })
 }
 
 // ── Resize ────────────────────────────────────────────────────────────────────
@@ -143,6 +152,13 @@ function typeColor(type: string) {
 
       <span class="card-count">{{ table.columns.length }}</span>
 
+      <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
+        <svg viewBox="0 0 10 10" fill="none">
+          <path v-if="!isCollapsed" d="M2 3.5l3 3 3-3" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path v-else d="M2 6.5l3-3 3 3" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
       <button
         class="delete-btn"
         :class="{ confirming: deleteConfirm }"
@@ -160,7 +176,7 @@ function typeColor(type: string) {
     </div>
 
     <!-- Columns -->
-    <div class="card-body">
+    <div v-if="!isCollapsed" class="card-body">
       <div v-for="col in table.columns" :key="col.name" class="col-row">
         <span class="col-pk" v-if="col.primaryKey" title="Primary Key">
           <svg viewBox="0 0 12 12" fill="none">
@@ -180,7 +196,7 @@ function typeColor(type: string) {
     </div>
 
     <!-- Footer: row count + query button -->
-    <div class="card-footer">
+    <div v-if="!isCollapsed" class="card-footer">
       <span class="footer-stat">
         <span v-if="table.rowCount === undefined" class="stat-loading">counting…</span>
         <span v-else class="stat-rows">
@@ -202,14 +218,16 @@ function typeColor(type: string) {
     </div>
 
     <!-- Resize handles -->
-    <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
-    <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
-    <div class="rh-se" @mousedown.stop="startResize($event, 'se')">
-      <svg viewBox="0 0 8 8" fill="none">
-        <line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-        <line x1="7" y1="4" x2="4" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-      </svg>
-    </div>
+    <template v-if="!isCollapsed">
+      <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
+      <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
+      <div class="rh-se" @mousedown.stop="startResize($event, 'se')">
+        <svg viewBox="0 0 8 8" fill="none">
+          <line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="7" y1="4" x2="4" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -301,6 +319,25 @@ function typeColor(type: string) {
   border-radius: 8px;
   flex-shrink: 0;
 }
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  opacity: 0.45;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.collapse-btn svg { width: 10px; height: 10px; }
+.collapse-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.15); }
 
 .delete-btn {
   display: flex;

@@ -4,13 +4,15 @@ import { useDuckDB } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import { usePersistence } from '../composables/usePersistence'
 
+const props = defineProps<{ initialFiles?: File[] }>()
 const emit = defineEmits<{ close: [] }>()
 
-const { registerFile, dropFile, exec, query, getTableInfo } = useDuckDB()
+const { registerFile, dropFile, exec, query, getTableInfo, loadExtension } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { saveTable } = usePersistence()
 
 type Status = 'queued' | 'processing' | 'done' | 'error'
+type DbStatus = 'queued' | 'scanning' | 'importing' | 'done' | 'error'
 
 interface FileImportItem {
   kind: 'file'
@@ -32,7 +34,18 @@ interface UrlImportItem {
   error?: string
 }
 
-type ImportItem = FileImportItem | UrlImportItem
+interface DbImportItem {
+  kind: 'db'
+  key: string
+  file: File
+  status: DbStatus
+  tables: string[]
+  tablesImported: number
+  currentTable?: string
+  error?: string
+}
+
+type ImportItem = FileImportItem | UrlImportItem | DbImportItem
 
 const items = ref<ImportItem[]>([])
 const isDragOver = ref(false)
@@ -44,12 +57,13 @@ const urlInput = ref('')
 const urlTableName = ref('')
 const urlError = ref('')
 
-// Auto-derive table name from URL path, but only when the user hasn't manually typed a name
 const urlNameUserEdited = ref<boolean>(false)
 watch(urlInput, (val) => {
   if (urlNameUserEdited.value) return
   try {
-    const urlPath = new URL(val).pathname
+    // Use a normalized https URL to extract the path for non-standard protocols
+    const normalized = val.replace(/^(s3|gcs|r2|hf):\/\//i, 'https://')
+    const urlPath = new URL(normalized).pathname
     const base = urlPath.split('/').pop()?.replace(/\.[^.]+$/, '') || ''
     urlTableName.value = base ? sanitize(base) : ''
   } catch {
@@ -70,10 +84,11 @@ function sanitize(filename: string): string {
 }
 
 function uniqueName(base: string): string {
-  // Check against both the store AND any names already queued in this session
   const taken = new Set([
     ...schemaStore.nodes.map((n) => n.name),
-    ...items.value.map((i) => i.tableName),
+    ...items.value
+      .filter((i): i is FileImportItem | UrlImportItem => i.kind === 'file' || i.kind === 'url')
+      .map((i) => i.tableName),
   ])
   if (!taken.has(base)) return base
   let n = 1
@@ -90,7 +105,7 @@ function nextPosition(): { x: number; y: number } {
   return { x: maxX + 280, y: anchor.y }
 }
 
-// ── Processing ────────────────────────────────────────────────────────────────
+// ── Processing: flat files ────────────────────────────────────────────────────
 
 function readFnForExt(fileName: string): string {
   if (/\.parquet$/i.test(fileName)) return `read_parquet('${fileName.replace(/'/g, "''")}')`
@@ -98,20 +113,17 @@ function readFnForExt(fileName: string): string {
   return `read_csv_auto('${fileName.replace(/'/g, "''")}', header = true, sample_size = -1)`
 }
 
-async function finalizeTable(item: ImportItem, fileName: string) {
+async function finalizeTable(item: FileImportItem | UrlImportItem, fileName: string) {
   const safeTable = item.tableName.replace(/"/g, '""')
   await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFnForExt(fileName)}`)
-
   const [columns, countResult] = await Promise.all([
     getTableInfo(item.tableName),
     query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
   ])
-
   const rowCount = Number(countResult.rows[0]?.n ?? 0)
   const { x, y } = nextPosition()
   schemaStore.addTable({ id: item.tableName, name: item.tableName, x, y, columns })
   schemaStore.setRowCount(item.tableName, rowCount)
-
   item.rowCount = rowCount
   item.status = 'done'
   await saveTable(item.tableName).catch(console.warn)
@@ -133,40 +145,147 @@ async function processItem(item: FileImportItem) {
 
 async function processUrlItem(item: UrlImportItem) {
   item.status = 'processing'
-  // derive a filename from the URL path for DuckDB to detect format
-  const urlPath = new URL(item.url).pathname
-  const baseName = urlPath.split('/').pop() || 'import'
-  const fileName = `__url_${item.tableName}_${baseName}`
   try {
-    const response = await fetch(item.url)
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    const buffer = new Uint8Array(await response.arrayBuffer())
-    await registerFile(fileName, buffer)
-    await finalizeTable(item, fileName)
+    // httpfs lets DuckDB fetch the URL directly in its worker, with HTTP range
+    // request support for Parquet (reads only the columns/rows needed).
+    // Supports https://, s3://, gcs://, r2://, hf:// out of the box.
+    await loadExtension('httpfs')
+    await finalizeTable(item, item.url)
   } catch (e) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    await dropFile(fileName)
   }
 }
 
+// ── Processing: database files (.sqlite / .db) ───────────────────────────────
+// DuckDB's registerFileBuffer puts data into DuckDB's own WebFS abstraction.
+// SQLite's C extension uses sqlite3_open() which bypasses that and hits the
+// Emscripten FS — so ATTACH/sqlite_scan both silently miss the registered data.
+// Solution: read SQLite files with sql.js (pure-JS SQLite) in JavaScript, then
+// pipe each table into DuckDB as NDJSON via the normal VFS channel.
+
+function sqliteTypeToDuckDB(sqliteType: string): string {
+  const t = sqliteType.toUpperCase()
+  if (/^INT|INTEGER|TINYINT|SMALLINT|MEDIUMINT|BIGINT/.test(t)) return 'BIGINT'
+  if (/^REAL|FLOAT|DOUBLE/.test(t)) return 'DOUBLE'
+  if (/^NUMERIC|DECIMAL/.test(t)) return 'DOUBLE'
+  if (/^BOOL/.test(t)) return 'BOOLEAN'
+  if (/^DATE$/.test(t)) return 'DATE'
+  if (/^DATETIME|TIMESTAMP/.test(t)) return 'TIMESTAMP'
+  return 'VARCHAR'
+}
+
+async function processDbItem(item: DbImportItem) {
+  item.status = 'scanning'
+
+  try {
+    const rawBuffer = new Uint8Array(await item.file.arrayBuffer())
+
+    // Lazy-load sql.js; its WASM is served from the same CDN DuckDB uses.
+    const { default: initSqlJs } = await import('sql.js')
+    const SQL = await initSqlJs({
+      locateFile: (f: string) => `https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/${f}`,
+    })
+    const sqlDb = new SQL.Database(rawBuffer)
+
+    try {
+      const tableRes = sqlDb.exec(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+      )
+      const tableNames: string[] = tableRes[0]?.values?.map((r) => String(r[0])) ?? []
+      item.tables = tableNames
+      if (!tableNames.length) { item.status = 'done'; return }
+      item.status = 'importing'
+
+      for (const tbl of tableNames) {
+        item.currentTable = tbl
+        const targetName = uniqueName(sanitize(tbl))
+        const safeTarget = targetName.replace(/"/g, '""')
+        const quotedSrc = `"${tbl.replace(/"/g, '""')}"`
+
+        // Get column info for DDL fallback (empty tables)
+        const pragmaRes = sqlDb.exec(`PRAGMA table_info(${quotedSrc})`)
+        const pragmaCols = pragmaRes[0]?.values ?? []
+
+        const dataRes = sqlDb.exec(`SELECT * FROM ${quotedSrc}`)
+        const cols: string[] = dataRes[0]?.columns ?? pragmaCols.map((r) => String(r[1]))
+        const rows = dataRes[0]?.values ?? []
+
+        if (!cols.length) { item.tablesImported++; continue }
+
+        if (rows.length === 0) {
+          // Empty table: build DDL from PRAGMA
+          const colDefs = pragmaCols
+            .map((r) => `"${String(r[1]).replace(/"/g, '""')}" ${sqliteTypeToDuckDB(String(r[2]))}`)
+            .join(', ')
+          await exec(`CREATE TABLE "${safeTarget}" (${colDefs})`)
+        } else {
+          // Serialize to NDJSON and import via DuckDB's JSON reader
+          const ndjson = rows
+            .map((row) =>
+              JSON.stringify(
+                Object.fromEntries(
+                  cols.map((col, i) => {
+                    const val = row[i]
+                    return [col, val instanceof Uint8Array ? null : val]
+                  }),
+                ),
+              ),
+            )
+            .join('\n')
+
+          const tmpName = `__ndjson_${targetName}_${Date.now()}.json`
+          await registerFile(tmpName, new TextEncoder().encode(ndjson))
+          try {
+            const safeTmp = tmpName.replace(/'/g, "''")
+            await exec(`CREATE TABLE "${safeTarget}" AS SELECT * FROM read_json_auto('${safeTmp}')`)
+          } finally {
+            await dropFile(tmpName)
+          }
+        }
+
+        const [columns, countResult] = await Promise.all([
+          getTableInfo(targetName),
+          query(`SELECT COUNT(*) AS n FROM "${safeTarget}"`),
+        ])
+        const rowCount = Number(countResult.rows[0]?.n ?? 0)
+        const { x, y } = nextPosition()
+        schemaStore.addTable({ id: targetName, name: targetName, x, y, columns })
+        schemaStore.setRowCount(targetName, rowCount)
+        await saveTable(targetName).catch(console.warn)
+        item.tablesImported++
+      }
+    } finally {
+      sqlDb.close()
+    }
+
+    item.status = 'done'
+    item.currentTable = undefined
+
+  } catch (e) {
+    item.status = 'error'
+    item.error = e instanceof Error ? e.message : String(e)
+  }
+}
+
+// ── Enqueue ───────────────────────────────────────────────────────────────────
+
 async function enqueue(files: File[]) {
-  const newItems: FileImportItem[] = files.map((file) => ({
-    kind: 'file' as const,
-    key: `${file.name}-${Date.now()}`,
-    file,
-    tableName: uniqueName(sanitize(file.name)),
-    status: 'queued' as Status,
-  }))
+  const newItems: ImportItem[] = files.map((file) => {
+    if (/\.(sqlite|db|duckdb)$/i.test(file.name)) {
+      return { kind: 'db' as const, key: `${file.name}-${Date.now()}`, file, status: 'queued' as DbStatus, tables: [], tablesImported: 0 }
+    }
+    return { kind: 'file' as const, key: `${file.name}-${Date.now()}`, file, tableName: uniqueName(sanitize(file.name)), status: 'queued' as Status }
+  })
 
   items.value.push(...newItems)
 
   if (!isProcessing.value) {
     isProcessing.value = true
     for (const item of items.value.filter((i) => i.status === 'queued')) {
-      if (item.kind === 'file') await processItem(item)
-      else await processUrlItem(item)
+      if (item.kind === 'file') await processItem(item as FileImportItem)
+      else if (item.kind === 'url') await processUrlItem(item as UrlImportItem)
+      else await processDbItem(item as DbImportItem)
     }
     isProcessing.value = false
   }
@@ -176,18 +295,12 @@ async function enqueueUrl() {
   const raw = urlInput.value.trim()
   urlError.value = ''
   if (!raw) return
-  try {
-    new URL(raw)
-  } catch {
-    urlError.value = 'Enter a valid URL'
-    return
-  }
+  // Allow s3://, hf://, gcs://, r2:// in addition to https://
+  const looksValid = /^(https?|s3|gcs|r2|hf):\/\/.+/i.test(raw)
+  if (!looksValid) { urlError.value = 'Enter a valid URL (https://, s3://, hf://, …)'; return }
 
   const nameBase = urlTableName.value.trim()
-  if (!nameBase) {
-    urlError.value = 'Enter a table name'
-    return
-  }
+  if (!nameBase) { urlError.value = 'Enter a table name'; return }
 
   const newItem: UrlImportItem = {
     kind: 'url',
@@ -196,8 +309,6 @@ async function enqueueUrl() {
     tableName: uniqueName(sanitize(nameBase)),
     status: 'queued',
   }
-
-  // Reset form
   urlInput.value = ''
   urlTableName.value = ''
   urlNameUserEdited.value = false
@@ -206,8 +317,9 @@ async function enqueueUrl() {
   if (!isProcessing.value) {
     isProcessing.value = true
     for (const item of items.value.filter((i) => i.status === 'queued')) {
-      if (item.kind === 'file') await processItem(item)
-      else await processUrlItem(item)
+      if (item.kind === 'file') await processItem(item as FileImportItem)
+      else if (item.kind === 'url') await processUrlItem(item as UrlImportItem)
+      else await processDbItem(item as DbImportItem)
     }
     isProcessing.value = false
   }
@@ -221,24 +333,19 @@ function onFileInputChange(e: Event) {
   input.value = ''
 }
 
-function onDragOver(e: DragEvent) {
-  e.preventDefault()
-  isDragOver.value = true
-}
+function onDragOver(e: DragEvent) { e.preventDefault(); isDragOver.value = true }
 
 function onDragLeave(e: DragEvent) {
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  if (
-    e.clientX < rect.left || e.clientX >= rect.right ||
-    e.clientY < rect.top  || e.clientY >= rect.bottom
-  ) isDragOver.value = false
+  if (e.clientX < rect.left || e.clientX >= rect.right || e.clientY < rect.top || e.clientY >= rect.bottom)
+    isDragOver.value = false
 }
 
 function onDrop(e: DragEvent) {
   e.preventDefault()
   isDragOver.value = false
   const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
-    /\.(csv|tsv|txt)$/i.test(f.name),
+    /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i.test(f.name),
   )
   if (files.length) enqueue(files)
 }
@@ -248,12 +355,14 @@ function onDrop(e: DragEvent) {
 function onBackdropClick(e: MouseEvent) {
   if (e.target === e.currentTarget && !isProcessing.value) emit('close')
 }
-
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape' && !isProcessing.value) emit('close')
 }
 
-onMounted(() => window.addEventListener('keydown', onKeyDown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  if (props.initialFiles?.length) enqueue([...props.initialFiles])
+})
 onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 
 // ── Computed ──────────────────────────────────────────────────────────────────
@@ -261,14 +370,18 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 const allSettled = computed(
   () => items.value.length > 0 && items.value.every((i) => i.status === 'done' || i.status === 'error'),
 )
-
 const doneCount  = computed(() => items.value.filter((i) => i.status === 'done').length)
 const errorCount = computed(() => items.value.filter((i) => i.status === 'error').length)
 
-function fmtRows(n: number) {
-  return n.toLocaleString() + (n === 1 ? ' row' : ' rows')
+function itemStatusClass(item: ImportItem): string {
+  if (item.kind !== 'db') return item.status
+  if (item.status === 'done') return 'done'
+  if (item.status === 'error') return 'error'
+  if (item.status === 'queued') return 'queued'
+  return 'processing'
 }
 
+function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' rows') }
 function fmtSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
@@ -288,12 +401,7 @@ function fmtSize(bytes: number) {
           </svg>
           Import Data
         </div>
-        <button
-          class="close-btn"
-          :disabled="isProcessing"
-          title="Close"
-          @click="emit('close')"
-        >
+        <button class="close-btn" :disabled="isProcessing" title="Close" @click="emit('close')">
           <svg viewBox="0 0 12 12" fill="none">
             <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
@@ -312,7 +420,7 @@ function fmtSize(bytes: number) {
         <input
           ref="fileInputRef"
           type="file"
-          accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+          accept=".csv,.tsv,.txt,.parquet,.json,.jsonl,.sqlite,.db,.duckdb"
           multiple
           hidden
           @change="onFileInputChange"
@@ -326,11 +434,10 @@ function fmtSize(bytes: number) {
           <path d="M24 19v3M24 22l-2-2M24 22l2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
 
-        <p class="drop-primary">
-          {{ isDragOver ? 'Release to import' : 'Drop CSV files here' }}
-        </p>
+        <p class="drop-primary">{{ isDragOver ? 'Release to import' : 'Drop files here' }}</p>
         <p class="drop-secondary">
-          or <span class="browse-link">browse files</span> &nbsp;·&nbsp; .csv .tsv .txt .parquet .json
+          or <span class="browse-link">browse files</span>
+          &nbsp;·&nbsp; .csv .parquet .json .sqlite .duckdb
         </p>
       </div>
 
@@ -346,7 +453,7 @@ function fmtSize(bytes: number) {
               v-model="urlInput"
               type="url"
               class="url-input"
-              placeholder="https://example.com/data.csv"
+              placeholder="https://… or s3://… or hf://datasets/…"
               :disabled="isProcessing"
             />
           </div>
@@ -374,14 +481,14 @@ function fmtSize(bytes: number) {
           v-for="item in items"
           :key="item.key"
           class="file-item"
-          :class="item.status"
+          :class="itemStatusClass(item)"
         >
           <!-- Status icon -->
           <div class="file-status-icon">
             <svg v-if="item.status === 'queued'" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/>
             </svg>
-            <svg v-else-if="item.status === 'processing'" class="spin" viewBox="0 0 14 14" fill="none">
+            <svg v-else-if="item.status !== 'done' && item.status !== 'error'" class="spin" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="2" stroke-dasharray="10 18" stroke-linecap="round"/>
             </svg>
             <svg v-else-if="item.status === 'done'" viewBox="0 0 14 14" fill="none">
@@ -394,29 +501,44 @@ function fmtSize(bytes: number) {
             </svg>
           </div>
 
-          <!-- File info -->
-          <div class="file-info">
+          <!-- File info: flat files -->
+          <div v-if="item.kind === 'file' || item.kind === 'url'" class="file-info">
             <div class="file-names">
-              <span class="file-original">
-                {{ item.kind === 'file' ? item.file.name : item.url }}
-              </span>
+              <span class="file-original">{{ item.kind === 'file' ? item.file.name : item.url }}</span>
               <span class="file-arrow">→</span>
               <span class="file-table">{{ item.tableName }}</span>
             </div>
             <div class="file-meta">
               <span v-if="item.kind === 'file'" class="file-size">{{ fmtSize(item.file.size) }}</span>
               <span v-else class="file-size url-label">URL</span>
-              <template v-if="item.status === 'processing'">
-                <span class="file-progress">Importing…</span>
+              <span v-if="item.status === 'processing'" class="file-progress">Importing…</span>
+              <span v-else-if="item.status === 'done'" class="file-rows-count">{{ fmtRows(item.rowCount!) }}</span>
+              <span v-else-if="item.status === 'error'" class="file-error-inline" :title="item.error">{{ item.error?.split('\n')[0] }}</span>
+            </div>
+          </div>
+
+          <!-- File info: database files -->
+          <div v-else class="file-info">
+            <div class="file-names">
+              <span class="file-original">{{ item.file.name }}</span>
+              <template v-if="item.tables.length">
+                <span class="file-arrow">→</span>
+                <span class="file-table">{{ item.tables.length }} table{{ item.tables.length !== 1 ? 's' : '' }}</span>
               </template>
-              <template v-else-if="item.status === 'done'">
-                <span class="file-rows-count">{{ fmtRows(item.rowCount!) }}</span>
-              </template>
-              <template v-else-if="item.status === 'error'">
-                <span class="file-error-inline" :title="item.error">
-                  {{ item.error?.split('\n')[0] }}
-                </span>
-              </template>
+            </div>
+            <div class="file-meta">
+              <span class="file-size">{{ fmtSize(item.file.size) }}</span>
+              <span v-if="item.status === 'queued'" class="file-progress">Queued</span>
+              <span v-else-if="item.status === 'scanning'" class="file-progress">Scanning…</span>
+              <span v-else-if="item.status === 'importing'" class="file-progress">
+                Importing {{ item.tablesImported + 1 }}/{{ item.tables.length }}…
+              </span>
+              <span v-else-if="item.status === 'done'" class="file-rows-count">
+                {{ item.tablesImported }} table{{ item.tablesImported !== 1 ? 's' : '' }} imported
+              </span>
+              <span v-else-if="item.status === 'error'" class="file-error-inline" :title="item.error">
+                {{ item.error?.split('\n')[0] }}
+              </span>
             </div>
           </div>
         </div>
@@ -425,29 +547,16 @@ function fmtSize(bytes: number) {
       <!-- Footer -->
       <div class="modal-footer">
         <span v-if="allSettled" class="settle-summary">
-          <template v-if="errorCount === 0">
-            {{ doneCount }} {{ doneCount === 1 ? 'table' : 'tables' }} imported
-          </template>
-          <template v-else>
-            {{ doneCount }} imported · <span class="err-count">{{ errorCount }} failed</span>
-          </template>
+          <template v-if="errorCount === 0">{{ doneCount }} {{ doneCount === 1 ? 'import' : 'imports' }} complete</template>
+          <template v-else>{{ doneCount }} done · <span class="err-count">{{ errorCount }} failed</span></template>
         </span>
         <span v-else-if="isProcessing" class="settle-summary">
           Importing {{ items.filter(i => i.status !== 'done' && i.status !== 'error').length }} remaining…
         </span>
         <span v-else class="settle-summary hint">DuckDB will auto-detect column types</span>
 
-        <button
-          v-if="!allSettled"
-          class="footer-btn secondary"
-          :disabled="isProcessing"
-          @click="emit('close')"
-        >Cancel</button>
-        <button
-          v-else
-          class="footer-btn primary"
-          @click="emit('close')"
-        >Done</button>
+        <button v-if="!allSettled" class="footer-btn secondary" :disabled="isProcessing" @click="emit('close')">Cancel</button>
+        <button v-else class="footer-btn primary" @click="emit('close')">Done</button>
       </div>
     </div>
   </div>
@@ -497,11 +606,7 @@ function fmtSize(bytes: number) {
   color: var(--text-primary);
 }
 
-.modal-title svg {
-  width: 16px;
-  height: 16px;
-  color: var(--accent);
-}
+.modal-title svg { width: 16px; height: 16px; color: var(--accent); }
 
 .close-btn {
   display: flex;
@@ -516,21 +621,9 @@ function fmtSize(bytes: number) {
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-
-.close-btn:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text-primary);
-}
-
-.close-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.close-btn svg {
-  width: 10px;
-  height: 10px;
-}
+.close-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text-primary); }
+.close-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.close-btn svg { width: 10px; height: 10px; }
 
 /* ── Drop zone ───────────────────────────────────────────────────────────── */
 .drop-zone {
@@ -546,40 +639,13 @@ function fmtSize(bytes: number) {
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
+.drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: rgba(88, 166, 255, 0.05); }
+.drop-zone.drag-over { background: rgba(88, 166, 255, 0.1); }
 
-.drop-zone:hover,
-.drop-zone.drag-over {
-  border-color: var(--accent);
-  background: rgba(88, 166, 255, 0.05);
-}
-
-.drop-zone.drag-over {
-  background: rgba(88, 166, 255, 0.1);
-}
-
-.drop-icon {
-  width: 36px;
-  height: 36px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.drop-primary {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.drop-secondary {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.browse-link {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
+.drop-icon { width: 36px; height: 36px; color: var(--text-muted); margin-bottom: 4px; }
+.drop-primary { font-size: 13.5px; font-weight: 500; color: var(--text-primary); }
+.drop-secondary { font-size: 12px; color: var(--text-muted); }
+.browse-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 /* ── File list ───────────────────────────────────────────────────────────── */
 .file-list {
@@ -595,14 +661,9 @@ function fmtSize(bytes: number) {
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--surface-2);
-  transition: background 0.1s;
 }
+.file-item:last-child { border-bottom: none; }
 
-.file-item:last-child {
-  border-bottom: none;
-}
-
-/* Status colors */
 .file-status-icon {
   flex-shrink: 0;
   width: 16px;
@@ -611,21 +672,14 @@ function fmtSize(bytes: number) {
   align-items: center;
   justify-content: center;
 }
-
-.file-status-icon svg {
-  width: 14px;
-  height: 14px;
-}
+.file-status-icon svg { width: 14px; height: 14px; }
 
 .file-item.queued    .file-status-icon { color: var(--text-muted); }
 .file-item.processing .file-status-icon { color: var(--accent); }
 .file-item.done      .file-status-icon { color: var(--success); }
 .file-item.error     .file-status-icon { color: var(--error); }
 
-.file-info {
-  flex: 1;
-  min-width: 0;
-}
+.file-info { flex: 1; min-width: 0; }
 
 .file-names {
   display: flex;
@@ -635,7 +689,6 @@ function fmtSize(bytes: number) {
   margin-bottom: 2px;
   overflow: hidden;
 }
-
 .file-original {
   color: var(--text-secondary);
   overflow: hidden;
@@ -644,42 +697,13 @@ function fmtSize(bytes: number) {
   flex-shrink: 1;
   min-width: 0;
 }
+.file-arrow { color: var(--text-muted); flex-shrink: 0; font-size: 11px; }
+.file-table { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); flex-shrink: 0; }
 
-.file-arrow {
-  color: var(--text-muted);
-  flex-shrink: 0;
-  font-size: 11px;
-}
-
-.file-table {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-primary);
-  flex-shrink: 0;
-}
-
-.file-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.file-size {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-}
-
-.file-progress {
-  color: var(--accent);
-  font-style: italic;
-}
-
-.file-rows-count {
-  color: var(--success);
-  font-family: var(--font-mono);
-}
-
+.file-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.file-size { color: var(--text-muted); font-family: var(--font-mono); }
+.file-progress { color: var(--accent); font-style: italic; }
+.file-rows-count { color: var(--success); font-family: var(--font-mono); }
 .file-error-inline {
   color: var(--error);
   overflow: hidden;
@@ -698,21 +722,9 @@ function fmtSize(bytes: number) {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
-
-.settle-summary {
-  flex: 1;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.settle-summary.hint {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.err-count {
-  color: var(--error);
-}
+.settle-summary { flex: 1; font-size: 12px; color: var(--text-secondary); }
+.settle-summary.hint { color: var(--text-muted); font-style: italic; }
+.err-count { color: var(--error); }
 
 .footer-btn {
   padding: 6px 16px;
@@ -723,32 +735,11 @@ function fmtSize(bytes: number) {
   cursor: pointer;
   transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
-
-.footer-btn.secondary {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.footer-btn.secondary:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text-primary);
-}
-
-.footer-btn.secondary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.footer-btn.primary {
-  background: var(--accent);
-  color: #0d1117;
-  border-color: transparent;
-  font-weight: 600;
-}
-
-.footer-btn.primary:hover {
-  background: var(--accent-hover);
-}
+.footer-btn.secondary { background: transparent; color: var(--text-secondary); }
+.footer-btn.secondary:hover:not(:disabled) { background: var(--surface-2); color: var(--text-primary); }
+.footer-btn.secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+.footer-btn.primary { background: var(--accent); color: #0d1117; border-color: transparent; font-weight: 600; }
+.footer-btn.primary:hover { background: var(--accent-hover); }
 
 /* ── URL import ──────────────────────────────────────────────────────────── */
 .url-section {
@@ -758,9 +749,7 @@ function fmtSize(bytes: number) {
   flex-direction: column;
   gap: 6px;
 }
-
-.url-row,
-.url-name-row {
+.url-row, .url-name-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -770,20 +759,9 @@ function fmtSize(bytes: number) {
   padding: 5px 8px;
   transition: border-color 0.15s;
 }
-
-.url-row:focus-within,
-.url-name-row:focus-within {
-  border-color: var(--accent);
-}
-
-.url-icon {
-  width: 14px;
-  height: 14px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.url-input {
+.url-row:focus-within, .url-name-row:focus-within { border-color: var(--accent); }
+.url-icon { width: 14px; height: 14px; color: var(--text-muted); flex-shrink: 0; }
+.url-input, .url-name-input {
   flex: 1;
   background: transparent;
   border: none;
@@ -793,35 +771,8 @@ function fmtSize(bytes: number) {
   font-family: var(--font-mono);
   min-width: 0;
 }
-
-.url-input::placeholder {
-  color: var(--text-muted);
-  font-family: var(--font-sans, sans-serif);
-}
-
-.url-name-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.url-name-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  font-size: 12px;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  min-width: 0;
-}
-
-.url-name-input::placeholder {
-  color: var(--text-muted);
-  font-family: var(--font-sans, sans-serif);
-}
-
+.url-input::placeholder, .url-name-input::placeholder { color: var(--text-muted); font-family: var(--font-sans, sans-serif); }
+.url-name-label { font-size: 11px; color: var(--text-muted); flex-shrink: 0; white-space: nowrap; }
 .url-btn {
   padding: 3px 10px;
   font-size: 12px;
@@ -834,33 +785,12 @@ function fmtSize(bytes: number) {
   flex-shrink: 0;
   transition: background 0.15s, opacity 0.15s;
 }
-
-.url-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.url-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.url-error {
-  font-size: 11.5px;
-  color: var(--error);
-  padding-left: 2px;
-}
-
-.url-label {
-  font-style: italic;
-  color: var(--accent);
-}
+.url-btn:hover:not(:disabled) { background: var(--accent-hover); }
+.url-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.url-error { font-size: 11.5px; color: var(--error); padding-left: 2px; }
+.url-label { font-style: italic; color: var(--accent); }
 
 /* ── Animations ──────────────────────────────────────────────────────────── */
-.spin {
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

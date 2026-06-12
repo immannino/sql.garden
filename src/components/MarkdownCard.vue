@@ -6,7 +6,7 @@ import { useSchemaStore } from '../stores/schema'
 
 const props = defineProps<{ node: MarkdownNode; selected?: boolean }>()
 const emit = defineEmits<{
-  dragStart: [{ id: string; mouseX: number; mouseY: number }]
+  dragStart: [{ id: string; mouseX: number; mouseY: number; shiftKey: boolean }]
   resizeStart: [{ id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }]
 }>()
 
@@ -40,11 +40,18 @@ function exitEdit() {
   isEditing.value = false
 }
 
+// ── View mode ─────────────────────────────────────────────────────────────────
+const isCollapsed = computed(() => props.node.viewMode === 'collapsed')
+function toggleCollapsed(e: MouseEvent) {
+  e.stopPropagation()
+  schemaStore.updateViewMode(props.node.id, isCollapsed.value ? 'default' : 'collapsed')
+}
+
 // ── Drag ──────────────────────────────────────────────────────────────────────
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   e.stopPropagation()
-  emit('dragStart', { id: props.node.id, mouseX: e.clientX, mouseY: e.clientY })
+  emit('dragStart', { id: props.node.id, mouseX: e.clientX, mouseY: e.clientY, shiftKey: e.shiftKey })
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
@@ -138,6 +145,13 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
         </svg>
       </button>
 
+      <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
+        <svg viewBox="0 0 10 10" fill="none">
+          <path v-if="!isCollapsed" d="M2 3.5l3 3 3-3" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path v-else d="M2 6.5l3-3 3 3" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
       <button
         class="delete-btn"
         :class="{ confirming: deleteConfirm }"
@@ -155,7 +169,7 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
     </div>
 
     <!-- Content -->
-    <div class="card-body" :style="{ height: `${node.h ?? 200}px` }" @mousedown.stop>
+    <div v-if="!isCollapsed" class="card-body" :style="{ height: `${node.h ?? 200}px` }" @mousedown.stop>
       <textarea
         v-if="isEditing"
         ref="textareaRef"
@@ -174,14 +188,16 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
     </div>
 
     <!-- Resize handles -->
-    <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
-    <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
-    <div class="rh-se" @mousedown.stop="startResize($event, 'se')">
-      <svg viewBox="0 0 8 8" fill="none">
-        <line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-        <line x1="7" y1="4" x2="4" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-      </svg>
-    </div>
+    <template v-if="!isCollapsed">
+      <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
+      <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
+      <div class="rh-se" @mousedown.stop="startResize($event, 'se')">
+        <svg viewBox="0 0 8 8" fill="none">
+          <line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="7" y1="4" x2="4" y2="7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -248,6 +264,24 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
 .card-name-input:focus {
   border-color: rgba(255, 255, 255, 0.75);
 }
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  opacity: 0.45;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.collapse-btn svg { width: 10px; height: 10px; }
+.collapse-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.15); }
 
 .icon-btn {
   display: flex;

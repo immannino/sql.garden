@@ -9,6 +9,8 @@ export interface Column {
   references?: { table: string; column: string }
 }
 
+export type ViewMode = 'default' | 'collapsed' | 'chart-only'
+
 export interface TableNode {
   kind: 'table'
   id: string
@@ -20,6 +22,7 @@ export interface TableNode {
   rowCount?: number
   w?: number
   h?: number
+  viewMode?: ViewMode
 }
 
 export interface QueryNode {
@@ -32,6 +35,7 @@ export interface QueryNode {
   color: string
   w?: number
   h?: number
+  viewMode?: ViewMode
 }
 
 export interface ChartNode {
@@ -42,12 +46,15 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'lineY' | 'areaY' | 'dot'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut'
   xColumn: string
   yColumn: string
+  colorColumn?: string
+  labelColumn?: string
   color: string
   w?: number
   h?: number
+  viewMode?: ViewMode
 }
 
 export interface MarkdownNode {
@@ -60,6 +67,7 @@ export interface MarkdownNode {
   color: string
   w?: number
   h?: number
+  viewMode?: ViewMode
 }
 
 export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode
@@ -99,6 +107,13 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n) { n.x = x; n.y = y }
   }
 
+  function updatePositions(positions: Map<string, { x: number; y: number }>) {
+    for (const node of nodes.value) {
+      const p = positions.get(node.id)
+      if (p) { node.x = p.x; node.y = p.y }
+    }
+  }
+
   function removeNode(id: string) {
     nodes.value = nodes.value.filter((n) => n.id !== id)
   }
@@ -118,7 +133,7 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'query') n.sql = sql
   }
 
-  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn'>>) {
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn'>>) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'chart') Object.assign(n, updates)
   }
@@ -126,6 +141,11 @@ export const useSchemaStore = defineStore('schema', () => {
   function updateMarkdownContent(id: string, content: string) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'markdown') n.content = content
+  }
+
+  function updateViewMode(id: string, mode: ViewMode) {
+    const idx = nodes.value.findIndex((n) => n.id === id)
+    if (idx >= 0) nodes.value.splice(idx, 1, { ...nodes.value[idx], viewMode: mode })
   }
 
   function updateNodeSize(id: string, w: number, h: number) {
@@ -147,7 +167,7 @@ export const useSchemaStore = defineStore('schema', () => {
   return {
     nodes,
     addTable, addQueryNode, addChartNode, addMarkdownNode,
-    updatePosition, updateNodeSize, removeNode, renameNode,
+    updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     setRowCount, updateQuerySql, updateChartConfig, updateMarkdownContent,
     setColorCursor, clear,
   }
