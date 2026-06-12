@@ -1,0 +1,49 @@
+team,confederation,group,fifa_rank_apr2026,elo_rating_2026,wc_titles,wc_appearances,last_wc_year,best_finish_encoded,squad_avg_age_est,squad_market_value_eur_m,key_player_market_value_eur_m,coach_wc_experience,host_nation,recent_form_pts_last10,qualifying_gf,qualifying_ga,qualifying_pts,consecutive_wc_appearances,titles_before_2026,is_debut,prediction_win_probability_pct,prediction_notes
+France,UEFA,I,1,1990,2,16,2022,7,26.1,1350,300,2,No,24,40,12,46,6,2,No,14.2,Best squad depth; Mbappé peak; coach Deschamps elite WC record
+Spain,UEFA,H,2,1990,1,16,2022,7,25.8,1200,180,1,No,22,43,10,48,8,1,No,12.8,Yamal/Pedri generational; dominant possession; strongest defense
+Argentina,CONMEBOL,J,3,1980,3,18,2022,7,28.4,1080,150,0,No,20,30,18,38,5,3,No,11.5,Defending champions; Messi 37yr last dance; team identity strong
+England,UEFA,L,4,1940,1,16,2022,6,25.9,1300,200,0,No,21,35,9,45,8,1,No,10.8,Bellingham best player in world; Saka/Foden/Palmer golden gen
+Portugal,UEFA,K,5,1940,0,8,2022,5,27.3,1050,180,1,No,20,32,11,40,4,0,No,7.4,Post-Ronaldo transition risk; Félix/Fernandes class; QF ceiling?
+Brazil,CONMEBOL,C,6,2030,5,22,2022,7,25.6,1100,220,0,No,18,28,15,36,22,5,No,9.2,Vinicius/Rodrygo elite; 24yr drought; historically always contender
+Netherlands,UEFA,F,7,1940,0,11,2022,4,26.8,980,120,1,No,22,31,10,40,8,0,No,6.8,Van Dijk world class; Gakpo/Depay; semi-final minimum
+Morocco,CAF,C,8,1860,0,6,2022,5,26.2,420,70,1,No,19,22,8,34,3,0,No,4.2,2022 semis showed world-class; Regragui tactical genius
+Belgium,UEFA,G,9,1900,0,14,2022,5,29.1,950,160,0,No,20,30,12,38,9,0,No,5.8,Aging golden gen but De Bruyne/Lukaku still elite; last chance
+Germany,UEFA,E,10,1960,4,20,2022,7,24.8,1150,120,0,No,18,38,16,42,7,4,No,6.2,Musiala/Wirtz future stars; rebuilding but dangerous; 4 titles history
+Croatia,UEFA,L,11,1880,0,8,2022,4,30.2,430,80,0,No,17,19,12,32,5,0,No,2.8,Modrić 39; Gvardiol young star; over-reliance on aging core
+Colombia,CONMEBOL,K,13,1870,0,6,2018,3,26.4,680,110,0,No,21,30,14,40,1,0,No,3.4,Díaz world-class; James still creative; QF minimum expectation
+Senegal,CAF,I,14,1780,0,4,2022,3,27.1,440,80,0,No,18,25,10,36,2,0,No,2.2,Mané/Diatta; AFCON champions; quarter-final realistic
+Mexico,CONCACAF,A,15,1780,0,17,2022,3,27.5,280,45,3,Yes,18,22,12,32,9,0,No,2.8,Host nation boost; QF wall historically; Gimenez world-class
+United States,CONCACAF,D,16,1820,0,11,2022,5,25.2,710,90,0,Yes,20,26,14,36,5,0,No,3.8,Best ever generation; Pulisic/Weah/Reyna; hosts boost huge
+Uruguay,CONMEBOL,H,17,1890,2,14,2022,7,26.8,620,130,0,No,19,25,16,30,3,2,No,3.2,Valverde elite; Núñez dangerous; always overachieves
+Japan,AFC,F,18,1800,0,8,2022,4,25.6,510,60,1,No,21,32,8,45,6,0,No,2.4,Kubo/Mitoma/Endo elite; best Asian team; R16 minimum
+Switzerland,UEFA,B,19,1820,0,12,2022,3,27.8,390,50,1,No,19,22,10,34,5,0,No,1.6,Xhaka leadership; always punch above weight; QF glass ceiling?
+Iran,AFC,G,21,1730,0,6,2022,2,27.4,190,35,0,No,15,18,10,28,6,0,No,0.6,Taremi elite; defensive block; group stage ceiling likely
+Turkey,UEFA,D,22,1790,0,3,2002,5,26.2,420,70,0,No,18,24,12,32,1,0,No,1.4,2002 magic possible again; Çalhanoğlu/Güler; playoff team mentality
+Ecuador,CONMEBOL,E,23,1740,0,4,2014,4,25.8,260,80,0,No,17,22,14,28,2,0,No,1.2,Caicedo world-class; good squad; R16 target
+Austria,UEFA,J,24,1770,0,7,1998,5,26.8,430,60,1,No,19,26,12,34,1,0,No,1.4,28yr absence ended; Sabitzer/Laimer; Rangnick system
+South Korea,AFC,A,25,1800,0,11,2022,5,28.3,430,80,0,No,18,24,14,30,8,0,No,1.2,Son final WC; Kim Min-jae elite; R16 expectation
+Australia,AFC,D,27,1720,0,6,2022,4,27.2,280,40,0,No,16,20,12,26,5,0,No,0.8,Socceroos competitive; R16 possible; Arnold's best system
+Canada,CONCACAF,B,30,1730,0,3,2022,2,25.1,350,70,0,Yes,21,28,12,36,2,0,No,1.6,Davies/David world-class; hosts boost; QF possible?
+Norway,UEFA,I,32,1800,0,3,1998,3,25.8,790,160,0,No,22,38,14,42,1,0,No,3.6,Haaland finally at WC; 29 Champions League goals; game-changer
+Egypt,CAF,G,33,1690,0,3,2018,2,27.6,260,80,0,No,17,24,10,34,1,0,No,0.8,Salah possibly final WC; strong team around him; R32 target
+Algeria,CAF,J,36,1700,0,4,2014,4,25.4,260,50,0,No,16,22,12,28,1,0,No,0.8,Mahrez-led; 2014 R16 benchmark; transition generation
+Sweden,UEFA,F,37,1800,0,12,2018,4,26.2,430,110,0,No,19,28,12,36,1,0,No,2.2,Isak/Kulusevski world class; QF possible dark horse
+Paraguay,CONMEBOL,D,38,1740,0,9,2010,3,26.8,220,40,0,No,15,16,12,22,1,0,No,0.6,Almirón creative; defensive; tough to beat; group stage likely
+Ivory Coast,CAF,E,39,1710,0,3,2014,2,26.4,250,45,0,No,16,22,12,26,1,0,No,0.6,Haller/Zaha attack; always poor luck in groups; R32 target
+Czechia,UEFA,A,41,1740,0,9,2006,4,26.8,280,60,0,No,17,22,10,30,1,0,No,0.8,Schick/Souček quality; playoff survivors; R32 target
+Scotland,UEFA,C,43,1730,0,8,1998,2,26.8,280,50,0,No,17,24,12,28,1,0,No,0.4,28yr wait; Robertson/McTominay; beating R32 would be massive
+Tunisia,CAF,F,47,1640,0,6,2022,2,27.4,150,30,0,No,14,18,10,24,4,0,No,0.2,6 WCs never past groups; Hannibal talented; pattern likely repeats
+Saudi Arabia,AFC,H,58,1640,0,6,2022,4,26.8,190,35,0,No,15,20,14,22,4,0,No,0.4,2022 Argentina upset; Al-Dawsari still key; R32 possible
+DR Congo,CAF,K,55,1650,0,1,1974,2,26.4,140,25,0,No,15,28,14,34,1,0,No,0.4,1974 as Zaire; talented squad; inter-conf playoff route
+Iraq,AFC,I,56,1620,0,1,1986,2,26.8,70,15,0,No,13,18,10,22,1,0,No,0.2,40-year wait; inspired result would be historic; group stage
+Qatar,AFC,B,53,1580,0,1,2022,2,26.8,110,20,0,No,14,20,12,24,1,0,No,0.2,2022 hosts; rarely past groups; 2 WC now
+Uzbekistan,AFC,K,57,1600,0,0,N/A,1,24.8,90,15,0,No,16,22,14,24,1,0,Yes,0.2,First WC; Shomurodov experienced; competitive
+Jordan,AFC,J,64,1580,0,0,N/A,1,26.2,55,10,0,No,15,18,12,22,1,0,Yes,0.2,First WC; organized defensive team; historic qualifier
+New Zealand,OFC,G,88,1570,0,2,2010,2,27.8,65,12,0,No,12,20,16,20,1,0,No,0.1,Only OFC team; quality gap significant; fight for points
+South Africa,CAF,A,60,1600,0,3,2010,2,27.8,120,20,0,No,15,24,14,26,1,0,No,0.2,2010 hosts; CAF qualifier; R32 would be achievement
+Ghana,CAF,L,73,1650,0,4,2022,3,25.6,180,50,0,No,15,22,14,24,2,0,No,0.4,Kudus talent; rebuilding; R32 possible
+Cape Verde,CAF,H,70,1540,0,0,N/A,1,26.4,90,15,0,No,16,24,12,26,1,0,Yes,0.2,Historic debut; upset potential; AFCON QF form
+Bosnia-Herzegovina,UEFA,B,71,1650,0,1,2014,2,27.8,180,35,0,No,16,20,12,24,1,0,No,0.4,Playoff stunners; Džeko legend; upset potential vs Qatar
+Haiti,CONCACAF,C,79,1540,0,1,1974,2,27.2,55,10,0,No,13,18,14,18,1,0,No,0.1,52yr wait; historic return; group stage survival aim
+Panama,CONCACAF,L,51,1600,0,1,2018,2,28.2,80,15,0,No,14,16,12,20,1,0,No,0.1,Physical; hard to beat; group stage likely ceiling
+Curaçao,CONCACAF,E,81,1480,0,0,N/A,1,26.8,35,8,0,No,14,18,14,18,1,0,Yes,0.1,156k population WC dream; historic just qualifying
