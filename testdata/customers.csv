@@ -1,0 +1,21 @@
+id,name,age,city,country,plan,monthly_spend,churn_risk,signup_date
+1,Alice Chen,28,San Francisco,USA,pro,149.00,low,2022-03-14
+2,Bob Smith,41,London,UK,starter,29.00,medium,2023-01-07
+3,Carol Davis,35,Toronto,Canada,pro,149.00,low,2021-11-22
+4,Dave Wilson,52,Sydney,Australia,enterprise,499.00,low,2020-06-30
+5,Eve Martinez,24,Mexico City,Mexico,starter,29.00,high,2023-08-19
+6,Frank Lee,38,Tokyo,Japan,pro,149.00,medium,2022-07-05
+7,Grace Kim,31,Seoul,South Korea,enterprise,499.00,low,2021-04-18
+8,Henry Brown,45,Berlin,Germany,starter,29.00,high,2023-11-02
+9,Isla Johnson,27,Paris,France,pro,149.00,low,2022-09-11
+10,Jack Williams,33,Amsterdam,Netherlands,starter,29.00,medium,2023-05-25
+11,Karen Taylor,48,Chicago,USA,enterprise,499.00,low,2020-12-14
+12,Liam Anderson,22,Dublin,Ireland,starter,29.00,high,2024-01-08
+13,Mia Thomas,36,Singapore,Singapore,pro,149.00,low,2021-08-29
+14,Noah Jackson,43,Dubai,UAE,enterprise,499.00,low,2019-10-17
+15,Olivia White,29,São Paulo,Brazil,pro,149.00,medium,2022-12-03
+16,Pablo Garcia,37,Madrid,Spain,starter,29.00,low,2023-03-20
+17,Quinn Harris,55,New York,USA,enterprise,499.00,low,2018-05-09
+18,Rosa Martinez,26,Buenos Aires,Argentina,starter,29.00,high,2024-02-14
+19,Sam Clark,40,Melbourne,Australia,pro,149.00,medium,2022-01-31
+20,Tina Lewis,32,Vancouver,Canada,pro,149.00,low,2021-06-17

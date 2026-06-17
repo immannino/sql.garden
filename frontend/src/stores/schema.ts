@@ -33,9 +33,17 @@ export interface QueryNode {
   y: number
   sql: string
   color: string
+  isView?: boolean
+  refreshInterval?: number
   w?: number
   h?: number
   viewMode?: ViewMode
+}
+
+export interface ConditionRule {
+  match: string   // exact string match; '*' = wildcard/default
+  label: string
+  color: string
 }
 
 export interface ChartNode {
@@ -46,11 +54,20 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'number' | 'boolean' | 'conditional'
   xColumn: string
   yColumn: string
   colorColumn?: string
   labelColumn?: string
+  // number type
+  chartLabel?: string
+  // boolean type
+  trueText?: string
+  falseText?: string
+  trueColor?: string
+  falseColor?: string
+  // conditional type
+  conditions?: ConditionRule[]
   color: string
   w?: number
   h?: number
@@ -70,7 +87,19 @@ export interface MarkdownNode {
   viewMode?: ViewMode
 }
 
-export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode
+export interface SectionNode {
+  kind: 'section'
+  id: string
+  name: string
+  x: number
+  y: number
+  w: number
+  h: number
+  color: string
+  viewMode?: ViewMode
+}
+
+export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode
 
 const PALETTE = [
   '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
@@ -87,19 +116,28 @@ export const useSchemaStore = defineStore('schema', () => {
   const nodes = ref<CanvasNode[]>([])
 
   function addTable(table: Omit<TableNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === table.id)) return
     nodes.value.push({ kind: 'table', ...table, color: nextColor(table.color) })
   }
 
   function addQueryNode(node: Omit<QueryNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
     nodes.value.push({ kind: 'query', ...node, color: nextColor(node.color) })
   }
 
   function addChartNode(node: Omit<ChartNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
     nodes.value.push({ kind: 'chart', ...node, color: nextColor(node.color) })
   }
 
   function addMarkdownNode(node: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
     nodes.value.push({ kind: 'markdown', ...node, color: nextColor(node.color) })
+  }
+
+  function addSection(node: Omit<SectionNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
+    nodes.value.unshift({ kind: 'section', ...node, color: nextColor(node.color) })
   }
 
   function updatePosition(id: string, x: number, y: number) {
@@ -133,7 +171,12 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'query') n.sql = sql
   }
 
-  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn'>>) {
+  function setQueryIsView(id: string, isView: boolean) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'query') n.isView = isView
+  }
+
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions'>>) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'chart') Object.assign(n, updates)
   }
@@ -141,6 +184,11 @@ export const useSchemaStore = defineStore('schema', () => {
   function updateMarkdownContent(id: string, content: string) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'markdown') n.content = content
+  }
+
+  function setRefreshInterval(id: string, seconds: number) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'query') n.refreshInterval = seconds
   }
 
   function updateViewMode(id: string, mode: ViewMode) {
@@ -166,9 +214,9 @@ export const useSchemaStore = defineStore('schema', () => {
 
   return {
     nodes,
-    addTable, addQueryNode, addChartNode, addMarkdownNode,
+    addTable, addQueryNode, addChartNode, addMarkdownNode, addSection,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
-    setRowCount, updateQuerySql, updateChartConfig, updateMarkdownContent,
+    setRowCount, updateQuerySql, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
     setColorCursor, clear,
   }
 })

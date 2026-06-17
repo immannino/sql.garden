@@ -1,0 +1,145 @@
+Group,Date,Team,Opponent,Side,City,Venue
+Group A,2026-06-11T19:00Z,Mexico,South Africa,home,Mexico City,Estadio Banorte
+Group A,2026-06-11T19:00Z,South Africa,Mexico,away,Mexico City,Estadio Banorte
+Group A,2026-06-12T02:00Z,South Korea,Czechia,home,Guadalajara,Estadio Akron
+Group A,2026-06-12T02:00Z,Czechia,South Korea,away,Guadalajara,Estadio Akron
+Group B,2026-06-12T19:00Z,Canada,Bosnia-Herzegovina,home,Toronto,BMO Field
+Group B,2026-06-12T19:00Z,Bosnia-Herzegovina,Canada,away,Toronto,BMO Field
+Group D,2026-06-13T01:00Z,United States,Paraguay,home,"Inglewood, California",SoFi Stadium
+Group D,2026-06-13T01:00Z,Paraguay,United States,away,"Inglewood, California",SoFi Stadium
+Group B,2026-06-13T19:00Z,Qatar,Switzerland,home,"Santa Clara, California",Levi's Stadium
+Group B,2026-06-13T19:00Z,Switzerland,Qatar,away,"Santa Clara, California",Levi's Stadium
+Group C,2026-06-13T22:00Z,Brazil,Morocco,home,"East Rutherford, New Jersey",MetLife Stadium
+Group C,2026-06-13T22:00Z,Morocco,Brazil,away,"East Rutherford, New Jersey",MetLife Stadium
+Group C,2026-06-14T01:00Z,Haiti,Scotland,home,"Foxborough, Massachusetts",Gillette Stadium
+Group C,2026-06-14T01:00Z,Scotland,Haiti,away,"Foxborough, Massachusetts",Gillette Stadium
+Group D,2026-06-14T04:00Z,Australia,Turkey,home,Vancouver,BC Place
+Group D,2026-06-14T04:00Z,Turkey,Australia,away,Vancouver,BC Place
+Group E,2026-06-14T17:00Z,Germany,Curaçao,home,"Houston, Texas",NRG Stadium
+Group E,2026-06-14T17:00Z,Curaçao,Germany,away,"Houston, Texas",NRG Stadium
+Group F,2026-06-14T20:00Z,Netherlands,Japan,home,"Arlington, Texas",AT&T Stadium
+Group F,2026-06-14T20:00Z,Japan,Netherlands,away,"Arlington, Texas",AT&T Stadium
+Group E,2026-06-14T23:00Z,Ivory Coast,Ecuador,home,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group E,2026-06-14T23:00Z,Ecuador,Ivory Coast,away,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group F,2026-06-15T02:00Z,Sweden,Tunisia,home,Guadalupe,Estadio BBVA
+Group F,2026-06-15T02:00Z,Tunisia,Sweden,away,Guadalupe,Estadio BBVA
+Group H,2026-06-15T16:00Z,Spain,Cape Verde,home,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group H,2026-06-15T16:00Z,Cape Verde,Spain,away,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group G,2026-06-15T19:00Z,Belgium,Egypt,home,"Seattle, Washington",Lumen Field
+Group G,2026-06-15T19:00Z,Egypt,Belgium,away,"Seattle, Washington",Lumen Field
+Group H,2026-06-15T22:00Z,Saudi Arabia,Uruguay,home,"Miami Gardens, Florida",Hard Rock Stadium
+Group H,2026-06-15T22:00Z,Uruguay,Saudi Arabia,away,"Miami Gardens, Florida",Hard Rock Stadium
+Group G,2026-06-16T01:00Z,Iran,New Zealand,home,"Inglewood, California",SoFi Stadium
+Group G,2026-06-16T01:00Z,New Zealand,Iran,away,"Inglewood, California",SoFi Stadium
+Group I,2026-06-16T19:00Z,France,Senegal,home,"East Rutherford, New Jersey",MetLife Stadium
+Group I,2026-06-16T19:00Z,Senegal,France,away,"East Rutherford, New Jersey",MetLife Stadium
+Group I,2026-06-16T22:00Z,Iraq,Norway,home,"Foxborough, Massachusetts",Gillette Stadium
+Group I,2026-06-16T22:00Z,Norway,Iraq,away,"Foxborough, Massachusetts",Gillette Stadium
+Group J,2026-06-17T01:00Z,Argentina,Algeria,home,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group J,2026-06-17T01:00Z,Algeria,Argentina,away,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group J,2026-06-17T04:00Z,Austria,Jordan,home,"Santa Clara, California",Levi's Stadium
+Group J,2026-06-17T04:00Z,Jordan,Austria,away,"Santa Clara, California",Levi's Stadium
+Group K,2026-06-17T17:00Z,Portugal,DR Congo,home,"Houston, Texas",NRG Stadium
+Group K,2026-06-17T17:00Z,DR Congo,Portugal,away,"Houston, Texas",NRG Stadium
+Group L,2026-06-17T20:00Z,England,Croatia,home,"Arlington, Texas",AT&T Stadium
+Group L,2026-06-17T20:00Z,Croatia,England,away,"Arlington, Texas",AT&T Stadium
+Group L,2026-06-17T23:00Z,Ghana,Panama,home,Toronto,BMO Field
+Group L,2026-06-17T23:00Z,Panama,Ghana,away,Toronto,BMO Field
+Group K,2026-06-18T02:00Z,Uzbekistan,Colombia,home,Mexico City,Estadio Banorte
+Group K,2026-06-18T02:00Z,Colombia,Uzbekistan,away,Mexico City,Estadio Banorte
+Group A,2026-06-18T16:00Z,Czechia,South Africa,home,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group A,2026-06-18T16:00Z,South Africa,Czechia,away,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group B,2026-06-18T19:00Z,Switzerland,Bosnia-Herzegovina,home,"Inglewood, California",SoFi Stadium
+Group B,2026-06-18T19:00Z,Bosnia-Herzegovina,Switzerland,away,"Inglewood, California",SoFi Stadium
+Group B,2026-06-18T22:00Z,Canada,Qatar,home,Vancouver,BC Place
+Group B,2026-06-18T22:00Z,Qatar,Canada,away,Vancouver,BC Place
+Group A,2026-06-19T01:00Z,Mexico,South Korea,home,Guadalajara,Estadio Akron
+Group A,2026-06-19T01:00Z,South Korea,Mexico,away,Guadalajara,Estadio Akron
+Group D,2026-06-19T19:00Z,United States,Australia,home,"Seattle, Washington",Lumen Field
+Group D,2026-06-19T19:00Z,Australia,United States,away,"Seattle, Washington",Lumen Field
+Group C,2026-06-19T22:00Z,Scotland,Morocco,home,"Foxborough, Massachusetts",Gillette Stadium
+Group C,2026-06-19T22:00Z,Morocco,Scotland,away,"Foxborough, Massachusetts",Gillette Stadium
+Group C,2026-06-20T00:30Z,Brazil,Haiti,home,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group C,2026-06-20T00:30Z,Haiti,Brazil,away,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group D,2026-06-20T03:00Z,Turkey,Paraguay,home,"Santa Clara, California",Levi's Stadium
+Group D,2026-06-20T03:00Z,Paraguay,Turkey,away,"Santa Clara, California",Levi's Stadium
+Group F,2026-06-20T17:00Z,Netherlands,Sweden,home,"Houston, Texas",NRG Stadium
+Group F,2026-06-20T17:00Z,Sweden,Netherlands,away,"Houston, Texas",NRG Stadium
+Group E,2026-06-20T20:00Z,Germany,Ivory Coast,home,Toronto,BMO Field
+Group E,2026-06-20T20:00Z,Ivory Coast,Germany,away,Toronto,BMO Field
+Group E,2026-06-21T00:00Z,Ecuador,Curaçao,home,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group E,2026-06-21T00:00Z,Curaçao,Ecuador,away,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group F,2026-06-21T04:00Z,Tunisia,Japan,home,Guadalupe,Estadio BBVA
+Group F,2026-06-21T04:00Z,Japan,Tunisia,away,Guadalupe,Estadio BBVA
+Group H,2026-06-21T16:00Z,Spain,Saudi Arabia,home,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group H,2026-06-21T16:00Z,Saudi Arabia,Spain,away,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group G,2026-06-21T19:00Z,Belgium,Iran,home,"Inglewood, California",SoFi Stadium
+Group G,2026-06-21T19:00Z,Iran,Belgium,away,"Inglewood, California",SoFi Stadium
+Group H,2026-06-21T22:00Z,Uruguay,Cape Verde,home,"Miami Gardens, Florida",Hard Rock Stadium
+Group H,2026-06-21T22:00Z,Cape Verde,Uruguay,away,"Miami Gardens, Florida",Hard Rock Stadium
+Group G,2026-06-22T01:00Z,New Zealand,Egypt,home,Vancouver,BC Place
+Group G,2026-06-22T01:00Z,Egypt,New Zealand,away,Vancouver,BC Place
+Group J,2026-06-22T17:00Z,Argentina,Austria,home,"Arlington, Texas",AT&T Stadium
+Group J,2026-06-22T17:00Z,Austria,Argentina,away,"Arlington, Texas",AT&T Stadium
+Group I,2026-06-22T21:00Z,France,Iraq,home,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group I,2026-06-22T21:00Z,Iraq,France,away,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group I,2026-06-23T00:00Z,Norway,Senegal,home,"East Rutherford, New Jersey",MetLife Stadium
+Group I,2026-06-23T00:00Z,Senegal,Norway,away,"East Rutherford, New Jersey",MetLife Stadium
+Group J,2026-06-23T03:00Z,Jordan,Algeria,home,"Santa Clara, California",Levi's Stadium
+Group J,2026-06-23T03:00Z,Algeria,Jordan,away,"Santa Clara, California",Levi's Stadium
+Group K,2026-06-23T17:00Z,Portugal,Uzbekistan,home,"Houston, Texas",NRG Stadium
+Group K,2026-06-23T17:00Z,Uzbekistan,Portugal,away,"Houston, Texas",NRG Stadium
+Group L,2026-06-23T20:00Z,England,Ghana,home,"Foxborough, Massachusetts",Gillette Stadium
+Group L,2026-06-23T20:00Z,Ghana,England,away,"Foxborough, Massachusetts",Gillette Stadium
+Group L,2026-06-23T23:00Z,Panama,Croatia,home,Toronto,BMO Field
+Group L,2026-06-23T23:00Z,Croatia,Panama,away,Toronto,BMO Field
+Group K,2026-06-24T02:00Z,Colombia,DR Congo,home,Guadalajara,Estadio Akron
+Group K,2026-06-24T02:00Z,DR Congo,Colombia,away,Guadalajara,Estadio Akron
+Group B,2026-06-24T19:00Z,Bosnia-Herzegovina,Qatar,home,"Seattle, Washington",Lumen Field
+Group B,2026-06-24T19:00Z,Qatar,Bosnia-Herzegovina,away,"Seattle, Washington",Lumen Field
+Group B,2026-06-24T19:00Z,Switzerland,Canada,home,Vancouver,BC Place
+Group B,2026-06-24T19:00Z,Canada,Switzerland,away,Vancouver,BC Place
+Group C,2026-06-24T22:00Z,Morocco,Haiti,home,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group C,2026-06-24T22:00Z,Haiti,Morocco,away,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group C,2026-06-24T22:00Z,Scotland,Brazil,home,"Miami Gardens, Florida",Hard Rock Stadium
+Group C,2026-06-24T22:00Z,Brazil,Scotland,away,"Miami Gardens, Florida",Hard Rock Stadium
+Group A,2026-06-25T01:00Z,Czechia,Mexico,home,Mexico City,Estadio Banorte
+Group A,2026-06-25T01:00Z,Mexico,Czechia,away,Mexico City,Estadio Banorte
+Group A,2026-06-25T01:00Z,South Africa,South Korea,home,Guadalupe,Estadio BBVA
+Group A,2026-06-25T01:00Z,South Korea,South Africa,away,Guadalupe,Estadio BBVA
+Group E,2026-06-25T20:00Z,Curaçao,Ivory Coast,home,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group E,2026-06-25T20:00Z,Ivory Coast,Curaçao,away,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group E,2026-06-25T20:00Z,Ecuador,Germany,home,"East Rutherford, New Jersey",MetLife Stadium
+Group E,2026-06-25T20:00Z,Germany,Ecuador,away,"East Rutherford, New Jersey",MetLife Stadium
+Group F,2026-06-25T23:00Z,Japan,Sweden,home,"Arlington, Texas",AT&T Stadium
+Group F,2026-06-25T23:00Z,Sweden,Japan,away,"Arlington, Texas",AT&T Stadium
+Group F,2026-06-25T23:00Z,Tunisia,Netherlands,home,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group F,2026-06-25T23:00Z,Netherlands,Tunisia,away,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group D,2026-06-26T02:00Z,Paraguay,Australia,home,"Santa Clara, California",Levi's Stadium
+Group D,2026-06-26T02:00Z,Australia,Paraguay,away,"Santa Clara, California",Levi's Stadium
+Group D,2026-06-26T02:00Z,Turkey,United States,home,"Inglewood, California",SoFi Stadium
+Group D,2026-06-26T02:00Z,United States,Turkey,away,"Inglewood, California",SoFi Stadium
+Group I,2026-06-26T19:00Z,Norway,France,home,"Foxborough, Massachusetts",Gillette Stadium
+Group I,2026-06-26T19:00Z,France,Norway,away,"Foxborough, Massachusetts",Gillette Stadium
+Group I,2026-06-26T19:00Z,Senegal,Iraq,home,Toronto,BMO Field
+Group I,2026-06-26T19:00Z,Iraq,Senegal,away,Toronto,BMO Field
+Group H,2026-06-27T00:00Z,Cape Verde,Saudi Arabia,home,"Houston, Texas",NRG Stadium
+Group H,2026-06-27T00:00Z,Saudi Arabia,Cape Verde,away,"Houston, Texas",NRG Stadium
+Group H,2026-06-27T00:00Z,Uruguay,Spain,home,Guadalajara,Estadio Akron
+Group H,2026-06-27T00:00Z,Spain,Uruguay,away,Guadalajara,Estadio Akron
+Group G,2026-06-27T03:00Z,Egypt,Iran,home,"Seattle, Washington",Lumen Field
+Group G,2026-06-27T03:00Z,Iran,Egypt,away,"Seattle, Washington",Lumen Field
+Group G,2026-06-27T03:00Z,New Zealand,Belgium,home,Vancouver,BC Place
+Group G,2026-06-27T03:00Z,Belgium,New Zealand,away,Vancouver,BC Place
+Group L,2026-06-27T21:00Z,Croatia,Ghana,home,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group L,2026-06-27T21:00Z,Ghana,Croatia,away,"Philadelphia, Pennsylvania",Lincoln Financial Field
+Group L,2026-06-27T21:00Z,Panama,England,home,"East Rutherford, New Jersey",MetLife Stadium
+Group L,2026-06-27T21:00Z,England,Panama,away,"East Rutherford, New Jersey",MetLife Stadium
+Group K,2026-06-27T23:30Z,Colombia,Portugal,home,"Miami Gardens, Florida",Hard Rock Stadium
+Group K,2026-06-27T23:30Z,Portugal,Colombia,away,"Miami Gardens, Florida",Hard Rock Stadium
+Group K,2026-06-27T23:30Z,DR Congo,Uzbekistan,home,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group K,2026-06-27T23:30Z,Uzbekistan,DR Congo,away,"Atlanta, Georgia",Mercedes-Benz Stadium
+Group J,2026-06-28T02:00Z,Algeria,Austria,home,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group J,2026-06-28T02:00Z,Austria,Algeria,away,"Kansas City, Missouri",GEHA Field at Arrowhead Stadium
+Group J,2026-06-28T02:00Z,Jordan,Argentina,home,"Arlington, Texas",AT&T Stadium
+Group J,2026-06-28T02:00Z,Argentina,Jordan,away,"Arlington, Texas",AT&T Stadium

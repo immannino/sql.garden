@@ -1,26 +1,25 @@
-# Builds the Vite app and deploys to GitHub Pages.
+# Builds the web playground and deploys to GitHub Pages.
 #
 # Prerequisites (one-time repo setup):
 #   Settings → Pages → Source → GitHub Actions
 #
-# Cross-origin isolation note:
-#   GitHub Pages doesn't support custom response headers, so the
-#   COOP/COEP headers in vite.config.ts are dev-only. DuckDB Wasm's
-#   selectBundle() detects the missing headers at runtime and falls back
-#   to the single-threaded MVP bundle automatically — the app still works.
+# COOP/COEP note:
+#   GitHub Pages doesn't support custom response headers, so the dev-server
+#   COOP/COEP headers in vite.web.config.ts are dev-only. DuckDB Wasm's
+#   selectBundle() auto-detects the missing headers and falls back to the
+#   single-threaded MVP bundle — the playground still works.
 #
-#   If you want the faster multi-threaded bundle on Pages, add
-#   coi-serviceworker (https://github.com/gzuidhof/coi-serviceworker):
-#     npm i -D coi-serviceworker
+#   To enable the faster multi-threaded bundle on Pages, add coi-serviceworker:
+#     cd frontend && npm i -D coi-serviceworker
 #     cp node_modules/coi-serviceworker/coi-serviceworker.js public/
 #   Then add to index.html <head>:
 #     <script src="/coi-serviceworker.js"></script>
 
-name: Build & Deploy
+name: Deploy Web Playground
 
 on:
   push:
-    branches: [rewrite]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -28,8 +27,6 @@ permissions:
   pages: write
   id-token: write
 
-# Only allow one deployment at a time; cancel any in-progress run
-# when a new push arrives, but don't cancel the deploy step itself.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -47,17 +44,20 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
+        working-directory: frontend
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Build web playground
+        working-directory: frontend
+        run: npm run build:web
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: frontend/dist-web
 
   deploy:
     name: Deploy

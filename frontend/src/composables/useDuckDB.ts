@@ -1,38 +1,44 @@
-import * as duckdb from '@duckdb/duckdb-wasm'
 import { ref } from 'vue'
 import type { Column } from '../stores/schema'
-
-// Module-level singleton — shared across all composable consumers
-let _db: duckdb.AsyncDuckDB | null = null
-let _initPromise: Promise<void> | null = null
+import * as GoApp from '../../wailsjs/go/main/App'
+import { IS_DESKTOP } from '../lib/env'
 
 const isReady = ref(false)
 const isLoading = ref(false)
 const initError = ref<string | null>(null)
 
+let _initPromise: Promise<void> | null = null
+let _webImpl: typeof import('./useDuckDB.web') | null = null
+
+async function getWebImpl() {
+  if (!_webImpl) _webImpl = await import('./useDuckDB.web')
+  return _webImpl
+}
+
+export interface QueryResult {
+  columns: string[]
+  rows: Record<string, unknown>[]
+  rowCount: number
+  durationMs: number
+}
+
 async function init(): Promise<void> {
-  if (_db) return
+  if (isReady.value) return
   if (_initPromise) return _initPromise
 
   _initPromise = (async () => {
     isLoading.value = true
     initError.value = null
     try {
-      const bundles = duckdb.getJsDelivrBundles()
-      const bundle = await duckdb.selectBundle(bundles)
-
-      const workerUrl = URL.createObjectURL(
-        new Blob([`importScripts("${bundle.mainWorker!}");`], { type: 'text/javascript' }),
-      )
-      const worker = new Worker(workerUrl)
-      const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING)
-      _db = new duckdb.AsyncDuckDB(logger, worker)
-      await _db.instantiate(bundle.mainModule, bundle.pthreadWorker)
-      URL.revokeObjectURL(workerUrl)
+      if (IS_DESKTOP) {
+        await GoApp.Exec('SELECT 1')
+      } else {
+        const web = await getWebImpl()
+        await web.wasmInit()
+      }
       isReady.value = true
-      // Pre-load httpfs so remote URLs work in QueryCard and ImportModal without setup.
-      loadExtension('httpfs').catch(() => {})
     } catch (e) {
+      console.error('[sql.garden] DuckDB init failed:', e)
       initError.value = e instanceof Error ? e.message : String(e)
       _initPromise = null
       throw e
@@ -44,97 +50,80 @@ async function init(): Promise<void> {
   return _initPromise
 }
 
-export interface QueryResult {
-  columns: string[]
-  rows: Record<string, unknown>[]
-  rowCount: number
-  durationMs: number
-}
-
 async function query(sql: string): Promise<QueryResult> {
-  if (!_db) throw new Error('DuckDB not ready')
-  const conn = await _db.connect()
-  const start = performance.now()
-  try {
-    const result = await conn.query(sql)
-    const durationMs = performance.now() - start
-    const columns = result.schema.fields.map((f) => f.name)
-    const rows = result.toArray().map((row) => {
-      const obj: Record<string, unknown> = {}
-      for (const col of columns) {
-        const val = (row as Record<string, unknown>)[col]
-        if (val === null || val === undefined) obj[col] = null
-        else if (typeof val === 'bigint') obj[col] = Number(val)
-        else if (val instanceof Date) obj[col] = val.toISOString()
-        else if (typeof val === 'object' && !Array.isArray(val)) obj[col] = JSON.stringify(val)
-        else obj[col] = val
-      }
-      return obj
-    })
-    return { columns, rows, rowCount: rows.length, durationMs }
-  } finally {
-    await conn.close()
-  }
+  if (IS_DESKTOP) return GoApp.Query(sql) as Promise<QueryResult>
+  return (await getWebImpl()).wasmQuery(sql)
 }
 
 async function exec(sql: string): Promise<void> {
-  if (!_db) throw new Error('DuckDB not ready')
-  const conn = await _db.connect()
-  try {
-    await conn.query(sql)
-  } finally {
-    await conn.close()
-  }
+  if (IS_DESKTOP) return GoApp.Exec(sql)
+  return (await getWebImpl()).wasmExec(sql)
 }
 
 async function registerFile(name: string, buffer: Uint8Array): Promise<void> {
-  if (!_db) throw new Error('DuckDB not ready')
-  await _db.registerFileBuffer(name, buffer)
+  if (IS_DESKTOP) return
+  return (await getWebImpl()).wasmRegisterFile(name, buffer)
 }
 
 async function dropFile(name: string): Promise<void> {
-  if (!_db) throw new Error('DuckDB not ready')
-  try { await _db.dropFile(name) } catch { /* file may already be gone */ }
+  if (IS_DESKTOP) return
+  return (await getWebImpl()).wasmDropFile(name)
 }
 
 async function getTableInfo(tableName: string): Promise<Column[]> {
-  // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
-  const safe = tableName.replace(/'/g, "''")
-  const result = await query(`PRAGMA table_info('${safe}')`)
-  return result.rows.map((row) => ({
-    name: String(row['name']),
-    type: String(row['type']),
-    primaryKey: Number(row['pk']) === 1,
-    nullable: Number(row['notnull']) === 0,
-  }))
+  if (IS_DESKTOP) {
+    const cols = await GoApp.GetTableInfo(tableName)
+    return cols.map((c) => ({
+      name: c.name,
+      type: c.type,
+      primaryKey: c.primaryKey,
+      nullable: c.nullable,
+    }))
+  }
+  return (await getWebImpl()).wasmGetTableInfo(tableName)
 }
 
 async function copyTableToBuffer(tableName: string): Promise<Uint8Array> {
-  if (!_db) throw new Error('DuckDB not ready')
-  const safe = tableName.replace(/"/g, '""')
-  const fileName = `__export_${tableName}.parquet`
-  const conn = await _db.connect()
-  try {
-    await conn.query(`COPY "${safe}" TO '${fileName}' (FORMAT PARQUET)`)
-  } finally {
-    await conn.close()
-  }
-  const buffer = await _db.copyFileToBuffer(fileName)
-  await _db.dropFile(fileName)
-  return buffer
+  if (!IS_DESKTOP) throw new Error('copyTableToBuffer not supported on web')
+  const b64 = await GoApp.CopyTableToParquet(tableName)
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
 }
 
-const _loadedExtensions = new Set<string>()
-
 async function loadExtension(name: string): Promise<void> {
-  if (_loadedExtensions.has(name)) return
-  try {
-    await exec(`LOAD '${name}'`)
-  } catch {
-    await exec(`INSTALL '${name}'`)
-    await exec(`LOAD '${name}'`)
+  if (IS_DESKTOP) return GoApp.LoadExtension(name)
+  return (await getWebImpl()).wasmLoadExtension(name)
+}
+
+async function importFromPath(filePath: string, tableName: string): Promise<void> {
+  if (!IS_DESKTOP) throw new Error('importFromPath not available on web')
+  return GoApp.ImportFromPath(filePath, tableName)
+}
+
+async function importFromUrl(url: string, tableName: string): Promise<void> {
+  if (IS_DESKTOP) return GoApp.ImportFromUrl(url, tableName)
+  return (await getWebImpl()).wasmImportFromUrl(url, tableName)
+}
+
+async function importSqliteFromPath(filePath: string, prefix = ''): Promise<string[]> {
+  if (!IS_DESKTOP) throw new Error('importSqliteFromPath not available on web')
+  return GoApp.ImportSqliteFromPath(filePath, prefix)
+}
+
+async function openFileDialog(): Promise<string> {
+  if (!IS_DESKTOP) return ''
+  return GoApp.OpenFileDialog()
+}
+
+// Chunked base64 encoder — avoids stack overflow on files larger than ~100 KB.
+export function toBase64(bytes: Uint8Array): string {
+  let out = ''
+  for (let i = 0; i < bytes.length; i += 8192) {
+    out += String.fromCharCode(...bytes.subarray(i, i + 8192))
   }
-  _loadedExtensions.add(name)
+  return btoa(out)
 }
 
 export function useDuckDB() {
@@ -143,5 +132,6 @@ export function useDuckDB() {
     init, query, exec, getTableInfo,
     registerFile, dropFile,
     copyTableToBuffer, loadExtension,
+    importFromPath, importFromUrl, importSqliteFromPath, openFileDialog,
   }
 }

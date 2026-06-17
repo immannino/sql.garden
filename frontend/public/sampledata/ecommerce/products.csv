@@ -1,0 +1,11 @@
+product_id,name,category,price,stock
+1,Ergonomic Chair,Furniture,349.99,42
+2,Standing Desk,Furniture,599.0,18
+3,"Monitor 27""",Displays,449.95,31
+4,Mechanical Keyboard,Peripherals,129.99,85
+5,USB-C Hub,Peripherals,49.99,120
+6,Webcam 4K,Peripherals,89.99,55
+7,Noise-Cancel Headphones,Audio,299.99,38
+8,Laptop Stand,Furniture,79.99,92
+9,LED Desk Lamp,Lighting,54.99,74
+10,Cable Management Kit,Accessories,19.99,200

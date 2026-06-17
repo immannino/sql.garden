@@ -5,27 +5,29 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --config vite.web.config.ts",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "build:web": "vue-tsc -b && vite build --config vite.web.config.ts",
+    "preview": "vite preview",
+    "preview:web": "vite preview --config vite.web.config.ts --outDir dist-web",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
+    "@duckdb/duckdb-wasm": "^1.29.0",
     "@observablehq/plot": "^0.6.17",
     "marked": "^18.0.5",
     "pinia": "^3.0.4",
-    "sql.js": "^1.14.1",
     "vue": "^3.5.34"
   },
   "devDependencies": {
     "@types/node": "^24.12.3",
-    "@types/sql.js": "^1.4.11",
     "@vitejs/plugin-vue": "^6.0.6",
+    "@vue/test-utils": "^2.4.11",
     "@vue/tsconfig": "^0.9.1",
+    "happy-dom": "^20.10.5",
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
-    "vite-plugin-pwa": "^1.3.0",
-    "vue-tsc": "^3.2.8",
-    "workbox-core": "^7.4.1",
-    "workbox-precaching": "^7.4.1"
+    "vitest": "^4.1.9",
+    "vue-tsc": "^3.2.8"
   }
 }

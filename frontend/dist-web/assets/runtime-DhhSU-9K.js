@@ -1,0 +1,1 @@
+function e(e,t){return window.runtime.OnFileDrop(e,t)}function t(){return window.runtime.OnFileDropOff()}export{e as OnFileDrop,t as OnFileDropOff};

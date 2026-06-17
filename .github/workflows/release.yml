@@ -1,0 +1,136 @@
+# Builds macOS and Windows desktop binaries on tag push and creates a GitHub release.
+#
+# Tagging workflow:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Secrets required for code signing (optional — builds work without them):
+#   APPLE_DEVELOPER_CERTIFICATE_P12_BASE64  — base64-encoded .p12 signing cert
+#   APPLE_DEVELOPER_CERTIFICATE_PASSWORD    — cert password
+#   APPLE_DEVELOPER_ID                      — "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID / APPLE_ID_PASSWORD            — for notarization
+#   WINDOWS_SIGNING_CERT_BASE64             — base64-encoded .pfx
+#   WINDOWS_SIGNING_CERT_PASSWORD           — cert password
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  build-macos:
+    name: Build macOS (universal)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build macOS universal binary
+        run: wails build -platform darwin/universal -o sql.garden
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql.garden-macos
+          path: build/bin/sql.garden.app
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (amd64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Windows binary
+        run: wails build -platform windows/amd64 -o sql.garden.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql.garden-windows
+          path: build/bin/sql.garden.exe
+          if-no-files-found: error
+
+  release:
+    name: Create Release
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sql.garden-macos
+          path: dist/macos
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sql.garden-windows
+          path: dist/windows
+
+      - name: Package macOS app
+        run: |
+          cd dist/macos
+          zip -r ../../sql.garden-macos-universal.zip sql.garden.app
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: sql.garden ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            sql.garden-macos-universal.zip
+            dist/windows/sql.garden.exe

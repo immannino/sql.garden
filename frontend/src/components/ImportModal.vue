@@ -3,21 +3,23 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import { usePersistence } from '../composables/usePersistence'
+import { IS_DESKTOP } from '../lib/env'
 
-const props = defineProps<{ initialFiles?: File[] }>()
+const props = defineProps<{ initialPaths?: string[]; webFileInput?: HTMLInputElement | null }>()
 const emit = defineEmits<{ close: [] }>()
 
-const { registerFile, dropFile, exec, query, getTableInfo, loadExtension } = useDuckDB()
+const { exec, query, getTableInfo, loadExtension, importFromPath, importFromUrl, importSqliteFromPath, registerFile, dropFile } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { saveTable } = usePersistence()
 
 type Status = 'queued' | 'processing' | 'done' | 'error'
 type DbStatus = 'queued' | 'scanning' | 'importing' | 'done' | 'error'
 
-interface FileImportItem {
-  kind: 'file'
+interface PathImportItem {
+  kind: 'path'
   key: string
-  file: File
+  filePath: string
+  displayName: string
   tableName: string
   status: Status
   rowCount?: number
@@ -37,20 +39,30 @@ interface UrlImportItem {
 interface DbImportItem {
   kind: 'db'
   key: string
-  file: File
+  filePath: string
+  displayName: string
+  prefix: string   // user-supplied prefix, e.g. "crm_"
+  ready: boolean   // true once user has confirmed and import should start
   status: DbStatus
   tables: string[]
   tablesImported: number
-  currentTable?: string
   error?: string
 }
 
-type ImportItem = FileImportItem | UrlImportItem | DbImportItem
+interface FileImportItem {
+  kind: 'file'
+  key: string
+  file: File
+  tableName: string
+  status: Status
+  rowCount?: number
+  error?: string
+}
+
+type ImportItem = PathImportItem | UrlImportItem | DbImportItem | FileImportItem
 
 const items = ref<ImportItem[]>([])
-const isDragOver = ref(false)
 const isProcessing = ref(false)
-const fileInputRef = ref<HTMLInputElement | null>(null)
 
 // URL import state
 const urlInput = ref('')
@@ -61,7 +73,6 @@ const urlNameUserEdited = ref<boolean>(false)
 watch(urlInput, (val) => {
   if (urlNameUserEdited.value) return
   try {
-    // Use a normalized https URL to extract the path for non-standard protocols
     const normalized = val.replace(/^(s3|gcs|r2|hf):\/\//i, 'https://')
     const urlPath = new URL(normalized).pathname
     const base = urlPath.split('/').pop()?.replace(/\.[^.]+$/, '') || ''
@@ -72,6 +83,10 @@ watch(urlInput, (val) => {
 })
 
 // ── Name helpers ──────────────────────────────────────────────────────────────
+
+function basename(filePath: string): string {
+  return filePath.split(/[/\\]/).pop() ?? filePath
+}
 
 function sanitize(filename: string): string {
   return filename
@@ -87,7 +102,7 @@ function uniqueName(base: string): string {
   const taken = new Set([
     ...schemaStore.nodes.map((n) => n.name),
     ...items.value
-      .filter((i): i is FileImportItem | UrlImportItem => i.kind === 'file' || i.kind === 'url')
+      .filter((i): i is PathImportItem | UrlImportItem | FileImportItem => i.kind === 'path' || i.kind === 'url' || i.kind === 'file')
       .map((i) => i.tableName),
   ])
   if (!taken.has(base)) return base
@@ -105,163 +120,70 @@ function nextPosition(): { x: number; y: number } {
   return { x: maxX + 280, y: anchor.y }
 }
 
-// ── Processing: flat files ────────────────────────────────────────────────────
+// ── Processing ────────────────────────────────────────────────────────────────
 
-function readFnForExt(fileName: string): string {
-  if (/\.parquet$/i.test(fileName)) return `read_parquet('${fileName.replace(/'/g, "''")}')`
-  if (/\.json(l)?$/i.test(fileName)) return `read_json_auto('${fileName.replace(/'/g, "''")}')`
-  return `read_csv_auto('${fileName.replace(/'/g, "''")}', header = true, sample_size = -1)`
-}
-
-async function finalizeTable(item: FileImportItem | UrlImportItem, fileName: string) {
-  const safeTable = item.tableName.replace(/"/g, '""')
-  await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFnForExt(fileName)}`)
+async function addTableToCanvas(tableName: string): Promise<number> {
+  const safeTable = tableName.replace(/"/g, '""')
   const [columns, countResult] = await Promise.all([
-    getTableInfo(item.tableName),
+    getTableInfo(tableName),
     query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
   ])
   const rowCount = Number(countResult.rows[0]?.n ?? 0)
   const { x, y } = nextPosition()
-  schemaStore.addTable({ id: item.tableName, name: item.tableName, x, y, columns })
-  schemaStore.setRowCount(item.tableName, rowCount)
-  item.rowCount = rowCount
-  item.status = 'done'
-  await saveTable(item.tableName).catch(console.warn)
+  schemaStore.addTable({ id: tableName, name: tableName, x, y, columns })
+  schemaStore.setRowCount(tableName, rowCount)
+  await saveTable(tableName).catch(console.warn)
+  return rowCount
 }
 
-async function processItem(item: FileImportItem) {
+async function processPathItem(item: PathImportItem) {
   item.status = 'processing'
   try {
-    const buffer = await item.file.arrayBuffer()
-    await registerFile(item.file.name, new Uint8Array(buffer))
-    await finalizeTable(item, item.file.name)
+    await importFromPath(item.filePath, item.tableName)
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
   } catch (e) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    await dropFile(item.file.name)
   }
 }
 
 async function processUrlItem(item: UrlImportItem) {
   item.status = 'processing'
   try {
-    // httpfs lets DuckDB fetch the URL directly in its worker, with HTTP range
-    // request support for Parquet (reads only the columns/rows needed).
-    // Supports https://, s3://, gcs://, r2://, hf:// out of the box.
-    await loadExtension('httpfs')
-    await finalizeTable(item, item.url)
+    if (/^https?:\/\//i.test(item.url)) {
+      // Go downloads the file directly — no DuckDB extension required.
+      await importFromUrl(item.url, item.tableName)
+    } else {
+      // Cloud storage schemes (s3://, hf://, gcs://, r2://) need DuckDB httpfs.
+      await loadExtension('httpfs')
+      const clean = item.url.replace(/'/g, "''")
+      let readFn: string
+      if (/\.parquet$/i.test(item.url)) readFn = `read_parquet('${clean}')`
+      else if (/\.json(l)?$/i.test(item.url)) readFn = `read_json_auto('${clean}')`
+      else readFn = `read_csv_auto('${clean}', header = true, sample_size = -1)`
+      const safeTable = item.tableName.replace(/"/g, '""')
+      await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFn}`)
+    }
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
   } catch (e) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
   }
 }
 
-// ── Processing: database files (.sqlite / .db) ───────────────────────────────
-// DuckDB's registerFileBuffer puts data into DuckDB's own WebFS abstraction.
-// SQLite's C extension uses sqlite3_open() which bypasses that and hits the
-// Emscripten FS — so ATTACH/sqlite_scan both silently miss the registered data.
-// Solution: read SQLite files with sql.js (pure-JS SQLite) in JavaScript, then
-// pipe each table into DuckDB as NDJSON via the normal VFS channel.
-
-function sqliteTypeToDuckDB(sqliteType: string): string {
-  const t = sqliteType.toUpperCase()
-  if (/^INT|INTEGER|TINYINT|SMALLINT|MEDIUMINT|BIGINT/.test(t)) return 'BIGINT'
-  if (/^REAL|FLOAT|DOUBLE/.test(t)) return 'DOUBLE'
-  if (/^NUMERIC|DECIMAL/.test(t)) return 'DOUBLE'
-  if (/^BOOL/.test(t)) return 'BOOLEAN'
-  if (/^DATE$/.test(t)) return 'DATE'
-  if (/^DATETIME|TIMESTAMP/.test(t)) return 'TIMESTAMP'
-  return 'VARCHAR'
-}
-
 async function processDbItem(item: DbImportItem) {
   item.status = 'scanning'
-
   try {
-    const rawBuffer = new Uint8Array(await item.file.arrayBuffer())
-
-    // Lazy-load sql.js; its WASM is served from the same CDN DuckDB uses.
-    const { default: initSqlJs } = await import('sql.js')
-    const SQL = await initSqlJs({
-      locateFile: (f: string) => `https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/${f}`,
-    })
-    const sqlDb = new SQL.Database(rawBuffer)
-
-    try {
-      const tableRes = sqlDb.exec(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
-      )
-      const tableNames: string[] = tableRes[0]?.values?.map((r) => String(r[0])) ?? []
-      item.tables = tableNames
-      if (!tableNames.length) { item.status = 'done'; return }
-      item.status = 'importing'
-
-      for (const tbl of tableNames) {
-        item.currentTable = tbl
-        const targetName = uniqueName(sanitize(tbl))
-        const safeTarget = targetName.replace(/"/g, '""')
-        const quotedSrc = `"${tbl.replace(/"/g, '""')}"`
-
-        // Get column info for DDL fallback (empty tables)
-        const pragmaRes = sqlDb.exec(`PRAGMA table_info(${quotedSrc})`)
-        const pragmaCols = pragmaRes[0]?.values ?? []
-
-        const dataRes = sqlDb.exec(`SELECT * FROM ${quotedSrc}`)
-        const cols: string[] = dataRes[0]?.columns ?? pragmaCols.map((r) => String(r[1]))
-        const rows = dataRes[0]?.values ?? []
-
-        if (!cols.length) { item.tablesImported++; continue }
-
-        if (rows.length === 0) {
-          // Empty table: build DDL from PRAGMA
-          const colDefs = pragmaCols
-            .map((r) => `"${String(r[1]).replace(/"/g, '""')}" ${sqliteTypeToDuckDB(String(r[2]))}`)
-            .join(', ')
-          await exec(`CREATE TABLE "${safeTarget}" (${colDefs})`)
-        } else {
-          // Serialize to NDJSON and import via DuckDB's JSON reader
-          const ndjson = rows
-            .map((row) =>
-              JSON.stringify(
-                Object.fromEntries(
-                  cols.map((col, i) => {
-                    const val = row[i]
-                    return [col, val instanceof Uint8Array ? null : val]
-                  }),
-                ),
-              ),
-            )
-            .join('\n')
-
-          const tmpName = `__ndjson_${targetName}_${Date.now()}.json`
-          await registerFile(tmpName, new TextEncoder().encode(ndjson))
-          try {
-            const safeTmp = tmpName.replace(/'/g, "''")
-            await exec(`CREATE TABLE "${safeTarget}" AS SELECT * FROM read_json_auto('${safeTmp}')`)
-          } finally {
-            await dropFile(tmpName)
-          }
-        }
-
-        const [columns, countResult] = await Promise.all([
-          getTableInfo(targetName),
-          query(`SELECT COUNT(*) AS n FROM "${safeTarget}"`),
-        ])
-        const rowCount = Number(countResult.rows[0]?.n ?? 0)
-        const { x, y } = nextPosition()
-        schemaStore.addTable({ id: targetName, name: targetName, x, y, columns })
-        schemaStore.setRowCount(targetName, rowCount)
-        await saveTable(targetName).catch(console.warn)
-        item.tablesImported++
-      }
-    } finally {
-      sqlDb.close()
+    item.status = 'importing'
+    const createdTables = await importSqliteFromPath(item.filePath, item.prefix)
+    item.tables = createdTables
+    item.tablesImported = createdTables.length
+    for (const tableName of createdTables) {
+      await addTableToCanvas(tableName)
     }
-
     item.status = 'done'
-    item.currentTable = undefined
-
   } catch (e) {
     item.status = 'error'
     item.error = e instanceof Error ? e.message : String(e)
@@ -270,84 +192,112 @@ async function processDbItem(item: DbImportItem) {
 
 // ── Enqueue ───────────────────────────────────────────────────────────────────
 
-async function enqueue(files: File[]) {
-  const newItems: ImportItem[] = files.map((file) => {
-    if (/\.(sqlite|db|duckdb)$/i.test(file.name)) {
-      return { kind: 'db' as const, key: `${file.name}-${Date.now()}`, file, status: 'queued' as DbStatus, tables: [], tablesImported: 0 }
-    }
-    return { kind: 'file' as const, key: `${file.name}-${Date.now()}`, file, tableName: uniqueName(sanitize(file.name)), status: 'queued' as Status }
-  })
-
-  items.value.push(...newItems)
-
-  if (!isProcessing.value) {
-    isProcessing.value = true
-    for (const item of items.value.filter((i) => i.status === 'queued')) {
-      if (item.kind === 'file') await processItem(item as FileImportItem)
-      else if (item.kind === 'url') await processUrlItem(item as UrlImportItem)
-      else await processDbItem(item as DbImportItem)
-    }
-    isProcessing.value = false
+async function runQueue() {
+  if (isProcessing.value) return
+  isProcessing.value = true
+  for (const item of items.value.filter((i) => i.status === 'queued')) {
+    if (item.kind === 'db' && !item.ready) continue  // waiting for user to confirm prefix
+    if (item.kind === 'path') await processPathItem(item)
+    else if (item.kind === 'url') await processUrlItem(item)
+    else if (item.kind === 'file') await processFileItem(item)
+    else await processDbItem(item)
   }
+  isProcessing.value = false
+}
+
+function startDbImport(item: DbImportItem) {
+  item.ready = true
+  runQueue()
+}
+
+async function enqueuePaths(paths: string[]) {
+  const DROPPABLE = /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i
+  const filtered = paths.filter((p) => DROPPABLE.test(p))
+  const newItems: ImportItem[] = filtered.map((filePath) => {
+    const name = basename(filePath)
+    if (/\.(sqlite|db|duckdb)$/i.test(name)) {
+      return { kind: 'db' as const, key: `${filePath}-${Date.now()}`, filePath, displayName: name, prefix: '', ready: false, status: 'queued' as DbStatus, tables: [], tablesImported: 0 }
+    }
+    return { kind: 'path' as const, key: `${filePath}-${Date.now()}`, filePath, displayName: name, tableName: uniqueName(sanitize(name)), status: 'queued' as Status }
+  })
+  items.value.push(...newItems)
+  runQueue()
+}
+
+async function processFileItem(item: FileImportItem) {
+  item.status = 'processing'
+  try {
+    const buffer = new Uint8Array(await item.file.arrayBuffer())
+    const ext = item.file.name.split('.').pop()?.toLowerCase() ?? 'csv'
+    const fname = `__imp_${Date.now()}.${ext}`
+    await registerFile(fname, buffer)
+    const safeTable = item.tableName.replace(/"/g, '""')
+    const readFn = ext === 'parquet' ? `read_parquet('${fname}')` :
+                   (ext === 'json' || ext === 'jsonl') ? `read_json_auto('${fname}')` :
+                   `read_csv_auto('${fname}', header=true, sample_size=-1)`
+    await exec(`DROP TABLE IF EXISTS "${safeTable}"`)
+    await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFn}`)
+    await dropFile(fname)
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
+  } catch (e) {
+    item.status = 'error'
+    item.error = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function openNativeDialog() {
+  if (!IS_DESKTOP) {
+    // Trigger the hidden file input passed in from App.vue
+    if (props.webFileInput) {
+      props.webFileInput.onchange = (e) => {
+        const files = (e.target as HTMLInputElement).files
+        if (files?.length) enqueueFiles(Array.from(files))
+        props.webFileInput!.value = ''
+      }
+      props.webFileInput.click()
+    }
+    return
+  }
+  const { OpenMultipleFilesDialog } = await import('../../wailsjs/go/main/App')
+  const paths = await OpenMultipleFilesDialog()
+  if (paths?.length) enqueuePaths(paths)
+}
+
+function enqueueFiles(files: File[]) {
+  const ACCEPTED = /\.(csv|tsv|txt|parquet|json|jsonl)$/i
+  const newItems: FileImportItem[] = files
+    .filter((f) => ACCEPTED.test(f.name))
+    .map((file) => ({
+      kind: 'file' as const,
+      key: `file-${Date.now()}-${file.name}`,
+      file,
+      tableName: uniqueName(sanitize(file.name)),
+      status: 'queued' as Status,
+    }))
+  items.value.push(...newItems)
+  runQueue()
 }
 
 async function enqueueUrl() {
   const raw = urlInput.value.trim()
   urlError.value = ''
   if (!raw) return
-  // Allow s3://, hf://, gcs://, r2:// in addition to https://
-  const looksValid = /^(https?|s3|gcs|r2|hf):\/\/.+/i.test(raw)
-  if (!looksValid) { urlError.value = 'Enter a valid URL (https://, s3://, hf://, …)'; return }
-
+  if (!/^(https?|s3|gcs|r2|hf):\/\/.+/i.test(raw)) {
+    urlError.value = 'Enter a valid URL (https://, s3://, hf://, …)'
+    return
+  }
   const nameBase = urlTableName.value.trim()
   if (!nameBase) { urlError.value = 'Enter a table name'; return }
 
-  const newItem: UrlImportItem = {
-    kind: 'url',
-    key: `url-${Date.now()}`,
-    url: raw,
-    tableName: uniqueName(sanitize(nameBase)),
-    status: 'queued',
-  }
+  items.value.push({
+    kind: 'url', key: `url-${Date.now()}`, url: raw,
+    tableName: uniqueName(sanitize(nameBase)), status: 'queued',
+  })
   urlInput.value = ''
   urlTableName.value = ''
   urlNameUserEdited.value = false
-  items.value.push(newItem)
-
-  if (!isProcessing.value) {
-    isProcessing.value = true
-    for (const item of items.value.filter((i) => i.status === 'queued')) {
-      if (item.kind === 'file') await processItem(item as FileImportItem)
-      else if (item.kind === 'url') await processUrlItem(item as UrlImportItem)
-      else await processDbItem(item as DbImportItem)
-    }
-    isProcessing.value = false
-  }
-}
-
-// ── File input / drag-and-drop ────────────────────────────────────────────────
-
-function onFileInputChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files?.length) enqueue(Array.from(input.files))
-  input.value = ''
-}
-
-function onDragOver(e: DragEvent) { e.preventDefault(); isDragOver.value = true }
-
-function onDragLeave(e: DragEvent) {
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  if (e.clientX < rect.left || e.clientX >= rect.right || e.clientY < rect.top || e.clientY >= rect.bottom)
-    isDragOver.value = false
-}
-
-function onDrop(e: DragEvent) {
-  e.preventDefault()
-  isDragOver.value = false
-  const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
-    /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i.test(f.name),
-  )
-  if (files.length) enqueue(files)
+  runQueue()
 }
 
 // ── Keyboard / outside-click close ───────────────────────────────────────────
@@ -361,32 +311,36 @@ function onKeyDown(e: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
-  if (props.initialFiles?.length) enqueue([...props.initialFiles])
+  if (props.initialPaths?.length) enqueuePaths([...props.initialPaths])
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
+
+defineExpose({ enqueuePaths })
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 
 const allSettled = computed(
-  () => items.value.length > 0 && items.value.every((i) => i.status === 'done' || i.status === 'error'),
+  () => items.value.length > 0 &&
+    items.value.every((i) =>
+      i.status === 'done' || i.status === 'error' ||
+      (i.kind === 'db' && !i.ready)
+    ),
 )
 const doneCount  = computed(() => items.value.filter((i) => i.status === 'done').length)
 const errorCount = computed(() => items.value.filter((i) => i.status === 'error').length)
 
 function itemStatusClass(item: ImportItem): string {
-  if (item.kind !== 'db') return item.status
-  if (item.status === 'done') return 'done'
-  if (item.status === 'error') return 'error'
-  if (item.status === 'queued') return 'queued'
-  return 'processing'
+  if (item.kind === 'db') {
+    if (item.status === 'done') return 'done'
+    if (item.status === 'error') return 'error'
+    if (item.status === 'queued' && !item.ready) return 'pending'
+    if (item.status === 'queued') return 'queued'
+    return 'processing'
+  }
+  return item.status
 }
 
 function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' rows') }
-function fmtSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
-}
 </script>
 
 <template>
@@ -408,24 +362,8 @@ function fmtSize(bytes: number) {
         </button>
       </div>
 
-      <!-- Drop zone -->
-      <div
-        class="drop-zone"
-        :class="{ 'drag-over': isDragOver }"
-        @dragover="onDragOver"
-        @dragleave="onDragLeave"
-        @drop="onDrop"
-        @click="fileInputRef?.click()"
-      >
-        <input
-          ref="fileInputRef"
-          type="file"
-          accept=".csv,.tsv,.txt,.parquet,.json,.jsonl,.sqlite,.db,.duckdb"
-          multiple
-          hidden
-          @change="onFileInputChange"
-        />
-
+      <!-- Drop zone / browse -->
+      <div class="drop-zone" @click="openNativeDialog">
         <svg class="drop-icon" viewBox="0 0 32 32" fill="none">
           <rect x="4" y="6" width="24" height="20" rx="3" stroke="currentColor" stroke-width="1.5"/>
           <path d="M4 12h24" stroke="currentColor" stroke-width="1.5"/>
@@ -433,12 +371,8 @@ function fmtSize(bytes: number) {
           <circle cx="24" cy="22" r="5" fill="var(--surface-1)" stroke="currentColor" stroke-width="1.5"/>
           <path d="M24 19v3M24 22l-2-2M24 22l2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-
-        <p class="drop-primary">{{ isDragOver ? 'Release to import' : 'Drop files here' }}</p>
-        <p class="drop-secondary">
-          or <span class="browse-link">browse files</span>
-          &nbsp;·&nbsp; .csv .parquet .json .sqlite .duckdb
-        </p>
+        <p class="drop-primary">{{ IS_DESKTOP ? 'Browse files or drop onto canvas' : 'Browse files' }}</p>
+        <p class="drop-secondary">{{ IS_DESKTOP ? '.csv .parquet .json .sqlite .duckdb' : '.csv .parquet .json .jsonl' }}</p>
       </div>
 
       <!-- URL import -->
@@ -485,7 +419,12 @@ function fmtSize(bytes: number) {
         >
           <!-- Status icon -->
           <div class="file-status-icon">
-            <svg v-if="item.status === 'queued'" viewBox="0 0 14 14" fill="none">
+            <!-- pending: db file waiting for user to confirm prefix -->
+            <svg v-if="item.kind === 'db' && !item.ready && item.status === 'queued'" class="pending-pulse" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/>
+              <circle cx="7" cy="7" r="2" fill="currentColor"/>
+            </svg>
+            <svg v-else-if="item.status === 'queued'" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/>
             </svg>
             <svg v-else-if="item.status !== 'done' && item.status !== 'error'" class="spin" viewBox="0 0 14 14" fill="none">
@@ -501,16 +440,15 @@ function fmtSize(bytes: number) {
             </svg>
           </div>
 
-          <!-- File info: flat files -->
-          <div v-if="item.kind === 'file' || item.kind === 'url'" class="file-info">
+          <!-- File info: flat files, browser files, and URLs -->
+          <div v-if="item.kind === 'path' || item.kind === 'url' || item.kind === 'file'" class="file-info">
             <div class="file-names">
-              <span class="file-original">{{ item.kind === 'file' ? item.file.name : item.url }}</span>
+              <span class="file-original">{{ item.kind === 'path' ? item.displayName : item.kind === 'file' ? item.file.name : item.url }}</span>
               <span class="file-arrow">→</span>
               <span class="file-table">{{ item.tableName }}</span>
             </div>
             <div class="file-meta">
-              <span v-if="item.kind === 'file'" class="file-size">{{ fmtSize(item.file.size) }}</span>
-              <span v-else class="file-size url-label">URL</span>
+              <span v-if="item.kind === 'url'" class="file-size url-label">URL</span>
               <span v-if="item.status === 'processing'" class="file-progress">Importing…</span>
               <span v-else-if="item.status === 'done'" class="file-rows-count">{{ fmtRows(item.rowCount!) }}</span>
               <span v-else-if="item.status === 'error'" class="file-error-inline" :title="item.error">{{ item.error?.split('\n')[0] }}</span>
@@ -520,19 +458,27 @@ function fmtSize(bytes: number) {
           <!-- File info: database files -->
           <div v-else class="file-info">
             <div class="file-names">
-              <span class="file-original">{{ item.file.name }}</span>
+              <span class="file-original">{{ item.displayName }}</span>
               <template v-if="item.tables.length">
                 <span class="file-arrow">→</span>
                 <span class="file-table">{{ item.tables.length }} table{{ item.tables.length !== 1 ? 's' : '' }}</span>
               </template>
             </div>
-            <div class="file-meta">
-              <span class="file-size">{{ fmtSize(item.file.size) }}</span>
-              <span v-if="item.status === 'queued'" class="file-progress">Queued</span>
-              <span v-else-if="item.status === 'scanning'" class="file-progress">Scanning…</span>
-              <span v-else-if="item.status === 'importing'" class="file-progress">
-                Importing {{ item.tablesImported + 1 }}/{{ item.tables.length }}…
-              </span>
+            <!-- Prefix input shown before import starts -->
+            <div v-if="item.status === 'queued' && !item.ready" class="db-prefix-row">
+              <input
+                v-model="item.prefix"
+                type="text"
+                class="prefix-input"
+                placeholder="prefix_ (optional)"
+                @keydown.enter.prevent="startDbImport(item)"
+              />
+              <button class="prefix-start-btn" @click="startDbImport(item)">Import</button>
+            </div>
+            <div v-else class="file-meta">
+              <span v-if="item.prefix && (item.status === 'importing' || item.status === 'done')" class="file-size">{{ item.prefix }}*</span>
+              <span v-if="item.status === 'scanning'" class="file-progress">Scanning…</span>
+              <span v-else-if="item.status === 'importing'" class="file-progress">Importing…</span>
               <span v-else-if="item.status === 'done'" class="file-rows-count">
                 {{ item.tablesImported }} table{{ item.tablesImported !== 1 ? 's' : '' }} imported
               </span>
@@ -678,6 +624,14 @@ function fmtSize(bytes: number) {
 .file-item.processing .file-status-icon { color: var(--accent); }
 .file-item.done      .file-status-icon { color: var(--success); }
 .file-item.error     .file-status-icon { color: var(--error); }
+.file-item.pending   .file-status-icon { color: var(--accent); }
+
+.file-item.pending {
+  background: rgba(88, 166, 255, 0.05);
+  border-left: 2px solid var(--accent);
+  padding-left: 14px; /* 16px - 2px border */
+}
+.file-item.pending .file-original { color: var(--text-primary); }
 
 .file-info { flex: 1; min-width: 0; }
 
@@ -790,7 +744,47 @@ function fmtSize(bytes: number) {
 .url-error { font-size: 11.5px; color: var(--error); padding-left: 2px; }
 .url-label { font-style: italic; color: var(--accent); }
 
+/* ── DB prefix row ───────────────────────────────────────────────────────── */
+.db-prefix-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.prefix-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  outline: none;
+}
+.prefix-input:focus { border-color: var(--accent); }
+.prefix-input::placeholder { color: var(--text-muted); font-family: var(--font-sans, sans-serif); }
+.prefix-start-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #0d1117;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.prefix-start-btn:hover { background: var(--accent-hover); }
+
 /* ── Animations ──────────────────────────────────────────────────────────── */
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.pending-pulse { animation: pending-pulse 1.5s ease-in-out infinite; }
+@keyframes pending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 </style>

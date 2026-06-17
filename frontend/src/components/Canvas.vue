@@ -4,8 +4,9 @@ import TableCard from './TableCard.vue'
 import QueryCard from './QueryCard.vue'
 import ChartCard from './ChartCard.vue'
 import MarkdownCard from './MarkdownCard.vue'
+import SectionCard from './SectionCard.vue'
 import { useSchemaStore } from '../stores/schema'
-import type { CanvasNode } from '../stores/schema'
+import type { CanvasNode, SectionNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
 
 const schemaStore = useSchemaStore()
@@ -15,6 +16,7 @@ const pan = ref({ x: 100, y: 60 })
 const zoom = ref(1)
 const isPanning = ref(false)
 const panStart = ref({ x: 0, y: 0 })
+const spaceDown = ref(false)
 
 // ── Drag (multi-node) ─────────────────────────────────────────────────────────
 interface DragState {
@@ -56,6 +58,7 @@ const marqueeRect = computed(() => {
 const HEADER_H = 34
 
 function getNodeCanvasBounds(node: CanvasNode): { x: number; y: number; w: number; h: number } {
+  if (node.kind === 'section') return { x: node.x, y: node.y, w: node.w, h: node.h }
   if (node.viewMode === 'collapsed') {
     const w = node.kind === 'table' ? (node.w ?? 240)
             : node.kind === 'query' ? (node.w ?? 280)
@@ -126,18 +129,22 @@ function onWheel(e: WheelEvent) {
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 1) return
   const target = e.target as HTMLElement
-  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card')) return
+  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card') || target.closest('.section-card')) return
   e.preventDefault()
 
-  if (e.button === 1) {
+  // Middle-click or Space+left-click → pan
+  if (e.button === 1 || (e.button === 0 && spaceDown.value)) {
     isPanning.value = true
     panStart.value = { x: e.clientX - pan.value.x, y: e.clientY - pan.value.y }
     return
   }
 
-  // Left click on empty canvas → marquee select
+  // Left click on empty canvas → marquee select (viewport-relative coords)
   if (!e.shiftKey) clearSelection()
-  marquee.value = { startX: e.clientX, startY: e.clientY, currentX: e.clientX, currentY: e.clientY, additive: e.shiftKey }
+  const rect = viewportRef.value!.getBoundingClientRect()
+  const vx = e.clientX - rect.left
+  const vy = e.clientY - rect.top
+  marquee.value = { startX: vx, startY: vy, currentX: vx, currentY: vy, additive: e.shiftKey }
 }
 
 function onCardResizeStart(payload: { id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }) {
@@ -164,6 +171,23 @@ function onCardDragStart(payload: { id: string; mouseX: number; mouseY: number; 
     const node = schemaStore.nodes.find((n) => n.id === selId)
     if (node) startPositions.set(selId, { x: node.x, y: node.y })
   }
+
+  // If a section is being dragged, pull along all nodes whose center lies within it
+  for (const selId of selectedIds.value) {
+    const sNode = schemaStore.nodes.find((n) => n.id === selId)
+    if (!sNode || sNode.kind !== 'section') continue
+    const s = sNode as SectionNode
+    for (const other of schemaStore.nodes) {
+      if (startPositions.has(other.id) || other.kind === 'section') continue
+      const b = getNodeCanvasBounds(other)
+      const cx = b.x + b.w / 2
+      const cy = b.y + b.h / 2
+      if (cx >= s.x && cx <= s.x + s.w && cy >= s.y && cy <= s.y + s.h) {
+        startPositions.set(other.id, { x: other.x, y: other.y })
+      }
+    }
+  }
+
   drag.value = { startMouse: { x: mouseX, y: mouseY }, startPositions }
 }
 
@@ -186,8 +210,11 @@ function onMouseMove(e: MouseEvent) {
     const newH = direction !== 'e' ? Math.max(60,  startSize.h + dy) : startSize.h
     schemaStore.updateNodeSize(id, newW, newH)
   } else if (marquee.value) {
-    marquee.value.currentX = e.clientX
-    marquee.value.currentY = e.clientY
+    const rect = viewportRef.value?.getBoundingClientRect()
+    if (rect) {
+      marquee.value.currentX = e.clientX - rect.left
+      marquee.value.currentY = e.clientY - rect.top
+    }
     updateMarqueeSelection()
   }
 }
@@ -200,7 +227,29 @@ function onMouseUp() {
 }
 
 function onKeyDown(e: KeyboardEvent) {
+  const tag = (document.activeElement as HTMLElement)?.tagName
+  const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement as HTMLElement)?.isContentEditable
+
   if (e.key === 'Escape') clearSelection()
+
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !inInput && selectedIds.value.size > 0) {
+    e.preventDefault()
+    for (const id of selectedIds.value) schemaStore.removeNode(id)
+    clearSelection()
+  }
+
+  if (e.key === ' ' && !e.repeat) {
+    if (inInput) return
+    e.preventDefault()
+    spaceDown.value = true
+  }
+}
+
+function onKeyUp(e: KeyboardEvent) {
+  if (e.key === ' ') {
+    spaceDown.value = false
+    if (isPanning.value) isPanning.value = false
+  }
 }
 
 function fitView() {
@@ -246,18 +295,22 @@ function focusNode(id: string) {
   }
 }
 
-defineExpose({ fitView, getCenter, focusNode, zoom, pan })
+function resetZoom() { zoom.value = 1 }
+
+defineExpose({ fitView, resetZoom, getCenter, focusNode, zoom, pan })
 
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)
   window.addEventListener('mouseup', onMouseUp)
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keyup', onKeyUp)
 })
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', onMouseMove)
   window.removeEventListener('mouseup', onMouseUp)
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keyup', onKeyUp)
 })
 </script>
 
@@ -265,14 +318,24 @@ onUnmounted(() => {
   <div
     ref="viewportRef"
     class="canvas-viewport"
-    :class="{ panning: isPanning, 'resize-e': resizeDir === 'e', 'resize-s': resizeDir === 's', 'resize-se': resizeDir === 'se' }"
+    :class="{ panning: isPanning, 'space-ready': spaceDown && !isPanning, 'resize-e': resizeDir === 'e', 'resize-s': resizeDir === 's', 'resize-se': resizeDir === 'se' }"
     @wheel.prevent="onWheel"
     @mousedown="onMouseDown"
   >
     <div class="canvas-grid" />
 
     <div class="canvas-layer" :style="transformStyle">
-      <template v-for="node in schemaStore.nodes" :key="node.id">
+      <!-- Sections render first (behind all other nodes) -->
+      <SectionCard
+        v-for="node in schemaStore.nodes.filter(n => n.kind === 'section')"
+        :key="node.id"
+        :node="(node as SectionNode)"
+        :selected="selectedIds.has(node.id)"
+        @drag-start="onCardDragStart"
+        @resize-start="onCardResizeStart"
+      />
+      <!-- Other nodes -->
+      <template v-for="node in schemaStore.nodes.filter(n => n.kind !== 'section')" :key="node.id">
         <TableCard
           v-if="node.kind === 'table'"
           :table="node"
@@ -328,6 +391,7 @@ onUnmounted(() => {
   cursor: default;
 }
 
+.canvas-viewport.space-ready { cursor: grab; }
 .canvas-viewport.panning    { cursor: grabbing; }
 .canvas-viewport.resize-e   { cursor: ew-resize; }
 .canvas-viewport.resize-s   { cursor: ns-resize; }

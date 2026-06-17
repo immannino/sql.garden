@@ -31,6 +31,25 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+[data-theme="light"] {
+  color-scheme: light;
+  --canvas-bg: #f6f8fa;
+  --canvas-dot: #d8dee4;
+  --surface-0: #f6f8fa;
+  --surface-1: #ffffff;
+  --surface-2: #f3f4f6;
+  --surface-3: #eaeef2;
+  --border: #d0d7de;
+  --text-primary: #1f2328;
+  --text-secondary: #59636e;
+  --text-muted: #9198a1;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --success: #1a7f37;
+  --error: #cf222e;
+  --warning: #9a6700;
+}
+
 body {
   height: 100vh;
   overflow: hidden;

@@ -1,19 +1,26 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRegisterSW } from 'virtual:pwa-register/vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import Canvas from './components/Canvas.vue'
 import QueryPanel from './components/QueryPanel.vue'
 import ImportModal from './components/ImportModal.vue'
 import Sidebar from './components/Sidebar.vue'
+import SettingsModal from './components/SettingsModal.vue'
+import DatasetPickerModal from './components/DatasetPickerModal.vue'
 import { useDuckDB } from './composables/useDuckDB'
 import { useSchemaStore } from './stores/schema'
 import { usePersistence } from './composables/usePersistence'
 import { useAppReady } from './composables/useAppReady'
+import { useTheme } from './composables/useTheme'
+import { IS_DESKTOP } from './lib/env'
+import type { main } from '../wailsjs/go/models'
 
 const { init, isReady, isLoading, initError, exec } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { loadAll, startAutoSave } = usePersistence()
 const { markAppReady } = useAppReady()
+const { loadTheme } = useTheme()
+const showSettings = ref(false)
+const showDatasetPicker = ref(false)
 
 function addQueryNode() {
   const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
@@ -55,6 +62,41 @@ function addMarkdownNode() {
   })
 }
 
+function addSection() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  schemaStore.addSection({
+    id: `section_${Date.now()}`,
+    name: 'Section',
+    x: center.x - 200,
+    y: center.y - 150,
+    w: 400,
+    h: 300,
+  })
+}
+
+function exportCanvasMarkdown() {
+  const parts: string[] = []
+  for (const node of schemaStore.nodes) {
+    if (node.kind === 'markdown') {
+      parts.push(`## ${node.name}\n\n${node.content}`)
+    } else if (node.kind === 'query') {
+      parts.push(`## ${node.name}\n\n\`\`\`sql\n${node.sql}\n\`\`\``)
+    } else if (node.kind === 'table') {
+      const header = '| Column | Type |\n| --- | --- |'
+      parts.push(`## ${node.name}\n\n${header}`)
+    }
+    // sections and charts: skip
+  }
+  const md = `# Canvas Export\n\n${parts.join('\n\n')}`
+  const blob = new Blob([md], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'canvas-export.md'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
   const center = canvasRef.value?.getCenter() ?? { x: 300, y: 300 }
   if (payload.type === 'query') {
@@ -82,60 +124,56 @@ function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
   }
 }
 
-// PWA update toast
-const { needRefresh, updateServiceWorker } = useRegisterSW()
-
-// PWA install prompt
-const installPrompt = ref<Event | null>(null)
-const showInstall = ref(false)
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault()
-  installPrompt.value = e
-  showInstall.value = true
-})
-
-async function installPWA() {
-  if (!installPrompt.value) return
-  ;(installPrompt.value as Event & { prompt(): Promise<void> }).prompt()
-  showInstall.value = false
-  installPrompt.value = null
-}
-
-function dismissUpdate() {
-  needRefresh.value = false
-}
-
 const canvasRef = ref<InstanceType<typeof Canvas> | null>(null)
 const queryPanelRef = ref<InstanceType<typeof QueryPanel> | null>(null)
+const importModalRef = ref<InstanceType<typeof ImportModal> | null>(null)
+const webFileInputRef = ref<HTMLInputElement | null>(null)
 const showQuery = ref(true)
 const showSidebar = ref(true)
 const showImport = ref(false)
-const isDragOverMain = ref(false)
-const initialFilesForModal = ref<File[]>([])
+const initialPathsForModal = ref<string[]>([])
 
-const DROPPABLE = /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i
+// ── Restore defaults ──────────────────────────────────────────────────────────
+const restoreConfirm = ref(false)
+let restoreTimer: ReturnType<typeof setTimeout> | null = null
 
-function onMainDragOver(e: DragEvent) {
-  if (showImport.value || !isReady.value) return
-  if (Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file')) {
-    e.preventDefault()
-    isDragOverMain.value = true
+function onRestoreClick() {
+  if (!restoreConfirm.value) {
+    restoreConfirm.value = true
+    restoreTimer = setTimeout(() => { restoreConfirm.value = false }, 3000)
+  } else {
+    if (restoreTimer) clearTimeout(restoreTimer)
+    restoreConfirm.value = false
+    restoreDefaults()
   }
 }
 
-function onMainDragLeave(e: DragEvent) {
-  if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null))
-    isDragOverMain.value = false
+async function restoreDefaults() {
+  try {
+    // Drop demo tables in FK-safe order, then recreate via SEED_SQL
+    await exec('DROP TABLE IF EXISTS order_items; DROP TABLE IF EXISTS orders; DROP TABLE IF EXISTS products; DROP TABLE IF EXISTS users;')
+    await exec(SEED_SQL)
+  } catch { /* ignore — tables may not have existed */ }
+  schemaStore.clear()
+  for (const table of SAMPLE_SCHEMA) {
+    schemaStore.addTable(table)
+  }
+  setTimeout(() => canvasRef.value?.fitView(), 100)
 }
 
-function onMainDrop(e: DragEvent) {
-  isDragOverMain.value = false
-  if (showImport.value || !isReady.value) return
-  e.preventDefault()
-  const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => DROPPABLE.test(f.name))
-  if (!files.length) return
-  initialFilesForModal.value = files
-  showImport.value = true
+const DROPPABLE = /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i
+
+function handleFileDrop(_x: number, _y: number, paths: string[]) {
+  if (!isReady.value) return
+  const valid = paths.filter((p) => DROPPABLE.test(p))
+  if (!valid.length) return
+  if (showImport.value && importModalRef.value) {
+    // Modal already open — add directly to its queue
+    importModalRef.value.enqueuePaths(valid)
+  } else {
+    initialPathsForModal.value = valid
+    showImport.value = true
+  }
 }
 
 function onFocusNode(id: string) {
@@ -257,15 +295,137 @@ const SAMPLE_SCHEMA = [
   },
 ]
 
+// ── AI node mosaic placement ──────────────────────────────────────────────────
+// The grid origin is locked on the FIRST placement of each session so that
+// newly-added AI nodes don't shift it right on subsequent calls.
+let aiPlacementIndex = 0
+let aiOriginX: number | null = null  // null = needs anchoring
+let aiOriginY: number | null = null
+const AI_W = 340, AI_H = 300, AI_GAP_X = 25, AI_GAP_Y = 25, AI_COLS = 3
+
+function nextAIPosition(): { x: number; y: number } {
+  if (aiOriginX === null) {
+    // Snapshot the canvas right-edge once; subsequent nodes use the same anchor.
+    const nodes = schemaStore.nodes
+    if (nodes.length === 0) {
+      aiOriginX = 100
+      aiOriginY = 80
+    } else {
+      let maxRight = -Infinity
+      let minY = Infinity
+      for (const n of nodes) {
+        const w = (n as any).w ?? AI_W
+        if (n.x + w > maxRight) maxRight = n.x + w
+        if (n.y < minY) minY = n.y
+      }
+      aiOriginX = maxRight + AI_GAP_X
+      aiOriginY = minY
+    }
+  }
+  const col = aiPlacementIndex % AI_COLS
+  const row = Math.floor(aiPlacementIndex / AI_COLS)
+  aiPlacementIndex++
+  return {
+    x: aiOriginX + col * (AI_W + AI_GAP_X),
+    y: (aiOriginY ?? 80) + row * (AI_H + AI_GAP_Y),
+  }
+}
+
+function handleCanvasAction(action: main.CanvasAction) {
+  if (action.type === 'clear') {
+    schemaStore.clear()
+    aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
+    return
+  }
+  if (action.type === 'fit_view') {
+    if (action.name === 'reset') {
+      canvasRef.value?.resetZoom()
+    } else {
+      setTimeout(() => canvasRef.value?.fitView(), 60)
+    }
+    return
+  }
+  const pos = action.hasPosition ? { x: action.x ?? 0, y: action.y ?? 0 } : nextAIPosition()
+  const id = action.nodeId ?? `ai_${Date.now()}`
+  if (action.type === 'query') {
+    schemaStore.addQueryNode({ id, name: action.name, sql: action.sql ?? '', ...pos })
+  } else if (action.type === 'chart') {
+    schemaStore.addChartNode({
+      id, name: action.name, ...pos,
+      sql: action.sql ?? '',
+      sourceId: action.sourceId ?? null,
+      chartType: (action.chartType as any) || 'barY',
+      xColumn: action.xColumn ?? '',
+      yColumn: action.yColumn ?? '',
+      colorColumn: action.colorColumn || undefined,
+      labelColumn: action.labelColumn || undefined,
+    })
+  } else if (action.type === 'markdown') {
+    schemaStore.addMarkdownNode({ id, name: action.name, ...pos, content: action.content ?? '' })
+  } else if (action.type === 'table') {
+    const cols = (action.columns ?? []).map((c) => ({ name: c.name, type: c.type }))
+    schemaStore.addTable({ id, name: action.name, ...pos, columns: cols })
+    if (action.rowCount) schemaStore.setRowCount(id, action.rowCount)
+  }
+  if (!action.hasPosition) setTimeout(() => canvasRef.value?.fitView(), 120)
+}
+
+// ── Sample datasets ───────────────────────────────────────────────────────────
+async function loadDataset(id: string) {
+  showDatasetPicker.value = false
+  try {
+    let actions: main.CanvasAction[]
+    if (IS_DESKTOP) {
+      const { LoadSampleDataset } = await import('../wailsjs/go/main/App')
+      actions = await LoadSampleDataset(id)
+    } else {
+      const { loadWebDataset } = await import('./lib/webSampleData')
+      actions = await loadWebDataset(id)
+    }
+    schemaStore.clear()
+    aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
+    for (const action of actions) {
+      handleCanvasAction(action)
+    }
+    setTimeout(() => canvasRef.value?.fitView(), 200)
+  } catch (e) {
+    console.error('loadDataset failed', e)
+  }
+}
+
+// ── MCP canvas-action stream ──────────────────────────────────────────────────
+let mcpStream: EventSource | null = null
+
+function connectMCPStream() {
+  mcpStream = new EventSource('http://localhost:37421/canvas-stream')
+  mcpStream.addEventListener('canvas-action', (e) => {
+    try { handleCanvasAction(JSON.parse(e.data)) } catch { /* ignore malformed */ }
+  })
+  // Reset placement index each time the stream (re-)connects so the grid
+  // starts fresh relative to the current canvas state.
+  mcpStream.addEventListener('open', () => { aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null })
+}
+
+function onGlobalKey(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    e.preventDefault()
+    showSettings.value = !showSettings.value
+  }
+}
+
 onMounted(async () => {
+  if (IS_DESKTOP) {
+    const { OnFileDrop } = await import('../wailsjs/runtime/runtime')
+    OnFileDrop(handleFileDrop, false)
+    connectMCPStream()
+  }
+  window.addEventListener('keydown', onGlobalKey)
+  await loadTheme()
   try {
     await init()
     const restored = await loadAll()
     if (!restored) {
-      await exec(SEED_SQL)
-      for (const table of SAMPLE_SCHEMA) {
-        schemaStore.addTable(table)
-      }
+      showDatasetPicker.value = true
     }
     await queryPanelRef.value?.refreshStats()
     startAutoSave()
@@ -274,34 +434,22 @@ onMounted(async () => {
     // initError already set by useDuckDB
   }
 })
+onUnmounted(async () => {
+  if (IS_DESKTOP) {
+    const { OnFileDropOff } = await import('../wailsjs/runtime/runtime')
+    OnFileDropOff()
+    mcpStream?.close()
+  }
+  window.removeEventListener('keydown', onGlobalKey)
+})
 </script>
 
 <template>
   <div class="app-shell">
     <!-- Toolbar -->
     <header class="toolbar">
-      <div class="toolbar-left">
-        <span class="logo">
-          🌱 sql.garden
-        </span>
-
-        <div class="toolbar-divider" />
-
-        <button
-          class="toolbar-btn"
-          :class="{ active: showSidebar }"
-          title="Toggle layers panel"
-          @click="showSidebar = !showSidebar"
-        >
-          <svg viewBox="0 0 16 16" fill="none">
-            <rect x="1" y="1" width="5" height="14" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-            <line x1="9" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="9" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="9" y1="12" x2="12" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-          Layers
-        </button>
-      </div>
+      <!-- macOS traffic-light spacer (TitleBarHiddenInset — desktop only) -->
+      <div v-if="IS_DESKTOP" class="macos-inset" />
 
       <div class="toolbar-center">
         <div class="db-status" :class="{ ready: isReady, loading: isLoading, error: !!initError }">
@@ -343,18 +491,6 @@ onMounted(async () => {
         <div class="toolbar-divider" />
 
         <button
-          v-if="showInstall"
-          class="toolbar-btn install-btn"
-          @click="installPWA"
-        >
-          <svg viewBox="0 0 16 16" fill="none">
-            <path d="M8 2v8M5 7l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-          </svg>
-          Install app
-        </button>
-
-        <button
           class="toolbar-btn"
           :disabled="!isReady"
           @click="showImport = true"
@@ -364,6 +500,72 @@ onMounted(async () => {
             <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
           Import
+        </button>
+        <!-- Web-only hidden file input — ImportModal triggers it via ref -->
+        <input
+          v-if="!IS_DESKTOP"
+          ref="webFileInputRef"
+          type="file"
+          accept=".csv,.tsv,.txt,.parquet,.json,.jsonl"
+          multiple
+          style="display:none"
+        />
+
+        <button
+          class="toolbar-btn"
+          :disabled="!isReady"
+          title="Load a sample dataset"
+          @click="showDatasetPicker = true"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="4" width="14" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M1 7h14" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M5 2h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          Samples
+        </button>
+
+        <div class="toolbar-divider" />
+
+        <button
+          class="toolbar-btn"
+          :disabled="!isReady"
+          title="Add a section to the canvas"
+          @click="addSection"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="1" y="1" width="7" height="5" rx="1.5" fill="currentColor" opacity=".3"/>
+            <line x1="4" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity=".5"/>
+          </svg>
+          Section
+        </button>
+
+        <button
+          class="toolbar-btn"
+          :disabled="!isReady"
+          title="Export canvas as Markdown"
+          @click="exportCanvasMarkdown"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 10V2M5 5l3-3 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3 11v1a1 1 0 001 1h8a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+          Export
+        </button>
+
+        <button
+          class="toolbar-btn"
+          :class="{ 'restore-confirm': restoreConfirm }"
+          :disabled="!isReady"
+          :title="restoreConfirm ? 'Click again to reset canvas to demo data' : 'Restore default demo data'"
+          @click="onRestoreClick"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M2 8A6 6 0 1 1 5 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <polyline points="2,1 2,5 6,5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          {{ restoreConfirm ? 'Reset?' : 'Restore' }}
         </button>
 
         <div class="toolbar-divider" />
@@ -379,7 +581,7 @@ onMounted(async () => {
             <rect x="1" y="10" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/>
             <rect x="10" y="10" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/>
           </svg>
-          Fit view
+          Fit View
         </button>
 
         <button
@@ -399,44 +601,62 @@ onMounted(async () => {
     </header>
 
     <!-- Main content -->
-    <div
-      class="main-area"
-      :class="{ 'drag-active': isDragOverMain }"
-      @dragover="onMainDragOver"
-      @dragleave="onMainDragLeave"
-      @drop="onMainDrop"
-    >
+    <div class="main-area">
+      <!-- Left rail: sits below macOS traffic lights, contains Layers toggle -->
+      <nav class="left-rail">
+        <button
+          class="rail-btn"
+          :class="{ active: showSidebar }"
+          title="Toggle layers panel"
+          @click="showSidebar = !showSidebar"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="5" height="14" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="9" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="12" x2="12" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <!-- Spacer pushes gear to bottom -->
+        <div class="rail-spacer" />
+
+        <button
+          class="rail-btn"
+          :class="{ active: showSettings }"
+          title="Settings (⌘,)"
+          @click="showSettings = true"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.1 3.1l1.1 1.1M11.8 11.8l1.1 1.1M3.1 12.9l1.1-1.1M11.8 4.2l1.1-1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </nav>
+
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" />
       <Canvas ref="canvasRef" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
-
-      <!-- Canvas drag-over overlay -->
-      <Transition name="drag-fade">
-        <div v-if="isDragOverMain" class="canvas-drop-overlay">
-          <div class="canvas-drop-hint">
-            <svg viewBox="0 0 32 32" fill="none">
-              <path d="M16 6v14M10 13l6 7 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M5 22v2a2 2 0 002 2h18a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            <span>Drop to import</span>
-          </div>
-        </div>
-      </Transition>
     </div>
+
+    <!-- Settings modal -->
+    <SettingsModal v-if="showSettings" @close="showSettings = false" />
+
+    <!-- Dataset picker modal -->
+    <DatasetPickerModal
+      v-if="showDatasetPicker"
+      @close="showDatasetPicker = false"
+      @load="loadDataset"
+    />
 
     <!-- Import modal -->
     <ImportModal
       v-if="showImport"
-      :initial-files="initialFilesForModal"
-      @close="showImport = false; initialFilesForModal = []"
+      ref="importModalRef"
+      :initial-paths="initialPathsForModal"
+      :web-file-input="webFileInputRef"
+      @close="showImport = false; initialPathsForModal = []"
     />
-
-    <!-- PWA update toast -->
-    <div v-if="needRefresh" class="pwa-toast">
-      <span>A new version is available.</span>
-      <button class="pwa-toast-btn" @click="updateServiceWorker()">Update</button>
-      <button class="pwa-toast-dismiss" @click="dismissUpdate">✕</button>
-    </div>
 
     <!-- Init error overlay -->
     <div v-if="initError" class="error-overlay">
@@ -470,17 +690,28 @@ onMounted(async () => {
   border-bottom: 1px solid var(--border);
   gap: 12px;
   z-index: 10;
+  /* Allow dragging the window from the toolbar */
+  -webkit-app-region: drag;
 }
 
-.toolbar-left,
+/* Make interactive elements non-draggable inside the drag zone */
+.toolbar button,
+.toolbar a,
+.toolbar input {
+  -webkit-app-region: no-drag;
+}
+
+/* Spacer that matches the macOS traffic-light inset width */
+.macos-inset {
+  width: 80px;
+  flex-shrink: 0;
+}
+
 .toolbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
-}
-
-.toolbar-right {
   justify-content: flex-end;
 }
 
@@ -489,21 +720,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   flex: 1;
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-}
-
-.logo svg {
-  width: 18px;
-  height: 18px;
 }
 
 .db-status {
@@ -550,6 +766,7 @@ onMounted(async () => {
   gap: 5px;
   padding: 4px 10px;
   font-size: 12px;
+  white-space: nowrap;
   color: var(--text-secondary);
   background: transparent;
   border: 1px solid transparent;
@@ -587,6 +804,12 @@ onMounted(async () => {
   border-color: rgba(88, 166, 255, 0.25);
 }
 
+.toolbar-btn.restore-confirm {
+  color: var(--error);
+  background: rgba(248, 81, 73, 0.08);
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
 .main-area {
   flex: 1;
   display: flex;
@@ -594,38 +817,53 @@ onMounted(async () => {
   position: relative;
 }
 
-.main-area.drag-active { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-.canvas-drop-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(88, 166, 255, 0.08);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-  pointer-events: none;
-}
-
-.canvas-drop-hint {
+/* Left rail — sits below the macOS traffic lights */
+.left-rail {
+  width: 44px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 28px 40px;
+  padding-top: 10px;
   background: var(--surface-1);
-  border: 2px solid var(--accent);
-  border-radius: 12px;
-  color: var(--accent);
-  font-size: 15px;
-  font-weight: 600;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  border-right: 1px solid var(--border);
+  z-index: 5;
 }
 
-.canvas-drop-hint svg { width: 36px; height: 36px; }
+.rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
 
-.drag-fade-enter-active, .drag-fade-leave-active { transition: opacity 0.12s ease; }
-.drag-fade-enter-from, .drag-fade-leave-to { opacity: 0; }
+.rail-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rail-btn:hover {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.rail-btn.active {
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.08);
+  border-color: rgba(88, 166, 255, 0.25);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
 
 .error-overlay {
   position: fixed;
@@ -670,53 +908,5 @@ onMounted(async () => {
   color: var(--accent);
 }
 
-.install-btn {
-  color: var(--accent);
-  border-color: rgba(88, 166, 255, 0.25);
-}
 
-.pwa-toast {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  z-index: 300;
-}
-
-.pwa-toast-btn {
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--accent);
-  color: #0d1117;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.pwa-toast-btn:hover {
-  background: var(--accent-hover);
-}
-
-.pwa-toast-dismiss {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-
-.pwa-toast-dismiss:hover {
-  color: var(--text-primary);
-}
 </style>

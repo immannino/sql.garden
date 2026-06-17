@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, computed, onMounted } from 'vue'
+import { ref, nextTick, watch, computed, onMounted, onUnmounted } from 'vue'
 import type { QueryNode } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
 import { useAppReady } from '../composables/useAppReady'
+import { CreateView, DropView } from '../../wailsjs/go/main/App'
 
 const props = defineProps<{ node: QueryNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -54,6 +55,32 @@ function onDeleteClick(e: MouseEvent) {
   }
 }
 
+// ── View (DuckDB VIEW) ────────────────────────────────────────────────────────
+const viewError = ref<string | null>(null)
+const isViewLoading = ref(false)
+
+async function toggleView(e: MouseEvent) {
+  e.stopPropagation()
+  const sql = localSql.value.trim()
+  const wasView = props.node.isView ?? false
+  if (!sql && !wasView) return
+  isViewLoading.value = true
+  viewError.value = null
+  try {
+    if (!wasView) {
+      await CreateView(props.node.name, sql)
+      schemaStore.setQueryIsView(props.node.id, true)
+    } else {
+      await DropView(props.node.name)
+      schemaStore.setQueryIsView(props.node.id, false)
+    }
+  } catch (err) {
+    viewError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    isViewLoading.value = false
+  }
+}
+
 // ── Inline rename ─────────────────────────────────────────────────────────────
 const isRenaming = ref(false)
 const renameValue = ref('')
@@ -67,11 +94,20 @@ function startRename(e: MouseEvent) {
   nextTick(() => renameInputRef.value?.select())
 }
 
-function commitRename() {
+async function commitRename() {
   const newName = renameValue.value.trim()
   isRenaming.value = false
   if (!newName || newName === props.node.name) return
+  const oldName = props.node.name
   schemaStore.renameNode(props.node.id, newName)
+  if (props.node.isView) {
+    try {
+      await DropView(oldName)
+      if (localSql.value.trim()) await CreateView(newName, localSql.value)
+    } catch (err) {
+      viewError.value = err instanceof Error ? err.message : String(err)
+    }
+  }
 }
 
 function onRenameKeydown(e: KeyboardEvent) {
@@ -180,7 +216,14 @@ watch(() => props.node.sql, (v) => { if (v !== localSql.value) localSql.value = 
 
 function onSqlInput() {
   if (sqlTimer) clearTimeout(sqlTimer)
-  sqlTimer = setTimeout(() => schemaStore.updateQuerySql(props.node.id, localSql.value), 400)
+  sqlTimer = setTimeout(() => {
+    schemaStore.updateQuerySql(props.node.id, localSql.value)
+    if (props.node.isView && localSql.value.trim()) {
+      CreateView(props.node.name, localSql.value).catch((err) => {
+        viewError.value = err instanceof Error ? err.message : String(err)
+      })
+    }
+  }, 400)
 }
 
 // ── Execution ──────────────────────────────────────────────────────────────────
@@ -222,6 +265,34 @@ onMounted(() => {
   if (!props.node.sql.trim()) return
   if (isAppReady.value) { run(); return }
   const stop = watch(isAppReady, (ready) => { if (ready) { stop(); run() } })
+})
+
+// ── Auto-refresh ───────────────────────────────────────────────────────────────
+const REFRESH_OPTIONS = [0, 5, 30, 60, 300, 1800]
+
+function labelFor(sec: number): string {
+  if (sec === 0) return 'Off'
+  if (sec < 60) return `${sec}s`
+  return `${sec / 60}m`
+}
+
+const intervalTimer = ref<ReturnType<typeof setInterval> | null>(null)
+
+function startTimer() {
+  if (intervalTimer.value) { clearInterval(intervalTimer.value); intervalTimer.value = null }
+  const ms = (props.node.refreshInterval ?? 0) * 1000
+  if (ms > 0) intervalTimer.value = setInterval(() => run(), ms)
+}
+
+function setRefresh(sec: number) {
+  schemaStore.setRefreshInterval(props.node.id, sec)
+  startTimer()
+}
+
+watch(() => props.node.refreshInterval, startTimer, { immediate: true })
+
+onUnmounted(() => {
+  if (intervalTimer.value) clearInterval(intervalTimer.value)
 })
 </script>
 
@@ -344,6 +415,11 @@ onMounted(() => {
       <div v-else class="results-state">Run to see results</div>
     </div>
 
+    <!-- View error -->
+    <div v-if="viewError" class="view-error-msg" @mousedown.stop>
+      {{ viewError.split('\n')[0] }} <button @click.stop="viewError = null">✕</button>
+    </div>
+
     <!-- Footer -->
     <div class="card-footer">
       <span class="footer-status">
@@ -353,12 +429,35 @@ onMounted(() => {
         <span v-else-if="runSummary" class="status-ok">{{ runSummary }}</span>
         <span v-else class="status-hint">⌘↵ to run</span>
       </span>
+      <select
+        class="refresh-select"
+        :class="{ 'refresh-active': (node.refreshInterval ?? 0) > 0 }"
+        :value="node.refreshInterval ?? 0"
+        @mousedown.stop
+        @change.stop="setRefresh(+($event.target as HTMLSelectElement).value)"
+      >
+        <option v-for="sec in REFRESH_OPTIONS" :key="sec" :value="sec">{{ labelFor(sec) }}</option>
+      </select>
       <button class="ghost-btn" title="Create a ChartCard linked to this query" @mousedown.stop @click.stop="createChart">
         <svg viewBox="0 0 10 10" fill="none">
           <rect x="0.5" y="0.5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.1"/>
           <polyline points="2,7 4,4 6,6 8,3" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         Chart
+      </button>
+      <button
+        class="ghost-btn"
+        :class="{ 'view-active': node.isView }"
+        :title="node.isView ? 'Drop DuckDB VIEW' : 'Publish as DuckDB VIEW'"
+        :disabled="isViewLoading"
+        @mousedown.stop
+        @click.stop="toggleView"
+      >
+        <svg viewBox="0 0 10 10" fill="none">
+          <circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.1"/>
+          <circle cx="5" cy="5" r="1.3" fill="currentColor"/>
+        </svg>
+        View
       </button>
       <button
         class="run-btn"
@@ -727,6 +826,34 @@ onMounted(() => {
 .ghost-btn svg { width: 9px; height: 9px; }
 .ghost-btn:hover { color: var(--text-primary); background: var(--surface-0); }
 
+.ghost-btn.view-active {
+  color: var(--success, #3fb950);
+  border-color: rgba(63, 185, 80, 0.35);
+  background: rgba(63, 185, 80, 0.08);
+}
+.ghost-btn.view-active:hover { background: rgba(63, 185, 80, 0.16); }
+
+.view-error-msg {
+  padding: 3px 8px;
+  font-size: 10px;
+  color: var(--error);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  background: var(--surface-1);
+}
+
+.view-error-msg button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+}
+
 /* ── Export bar ──────────────────────────────────────────────────────────── */
 .export-bar {
   display: flex;
@@ -878,4 +1005,22 @@ onMounted(() => {
 .query-card.selected .rh-e,
 .query-card.selected .rh-s,
 .query-card.selected .rh-se { opacity: 1; }
+
+/* ── Refresh select ──────────────────────────────────────────────────────── */
+.refresh-select {
+  padding: 2px 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+}
+.refresh-select.refresh-active {
+  color: var(--success);
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.08);
+}
 </style>

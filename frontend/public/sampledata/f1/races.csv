@@ -1,0 +1,23 @@
+race_id,season,round,name,circuit,country,date
+1,2023,1,Bahrain Grand Prix,Bahrain International Circuit,Bahrain,2023-03-05
+2,2023,2,Saudi Arabian Grand Prix,Jeddah Corniche Circuit,Saudi Arabia,2023-03-19
+3,2023,3,Australian Grand Prix,Albert Park Circuit,Australia,2023-03-30
+4,2023,4,Azerbaijan Grand Prix,Baku City Circuit,Azerbaijan,2023-04-30
+5,2023,5,Miami Grand Prix,Miami International Autodrome,USA,2023-05-07
+6,2023,6,Monaco Grand Prix,Circuit de Monaco,Monaco,2023-05-28
+7,2023,7,Spanish Grand Prix,Circuit de Barcelona-Catalunya,Spain,2023-06-04
+8,2023,8,Canadian Grand Prix,Circuit Gilles Villeneuve,Canada,2023-06-18
+9,2023,9,Austrian Grand Prix,Red Bull Ring,Austria,2023-07-02
+10,2023,10,British Grand Prix,Silverstone Circuit,UK,2023-07-09
+11,2023,11,Hungarian Grand Prix,Hungaroring,Hungary,2023-07-23
+12,2023,12,Belgian Grand Prix,Circuit de Spa-Francorchamps,Belgium,2023-07-30
+13,2023,13,Dutch Grand Prix,Circuit Zandvoort,Netherlands,2023-08-27
+14,2023,14,Italian Grand Prix,Autodromo Nazionale Monza,Italy,2023-09-03
+15,2023,15,Singapore Grand Prix,Marina Bay Street Circuit,Singapore,2023-09-17
+16,2023,16,Japanese Grand Prix,Suzuka International Circuit,Japan,2023-09-24
+17,2023,17,Qatar Grand Prix,Lusail International Circuit,Qatar,2023-10-08
+18,2023,18,United States Grand Prix,Circuit of the Americas,USA,2023-10-22
+19,2023,19,Mexico City Grand Prix,Autodromo Hermanos Rodriguez,Mexico,2023-10-29
+20,2023,20,São Paulo Grand Prix,Autodromo José Carlos Pace,Brazil,2023-11-05
+21,2023,21,Las Vegas Grand Prix,Las Vegas Strip Circuit,USA,2023-11-18
+22,2023,22,Abu Dhabi Grand Prix,Yas Marina Circuit,UAE,2023-11-26

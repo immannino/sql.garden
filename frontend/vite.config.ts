@@ -1,10 +1,25 @@
+import path from 'node:path'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// Wails branch: PWA and WASM-specific config removed.
-// DuckDB queries go through Go bindings; no duckdb-wasm needed.
 export default defineConfig({
   plugins: [vue()],
-  // Wails injects its runtime at wails://wails/ — no COOP/COEP headers needed
-  // in desktop mode (those were only required for SharedArrayBuffer in the browser).
+  define: {
+    // IS_DESKTOP=true marks all WASM branches as dead code.
+    __IS_DESKTOP__: 'true',
+  },
+  resolve: {
+    alias: [
+      // Redirect web-only modules to empty stubs so @duckdb/duckdb-wasm
+      // (and its ~75MB WASM assets) are never included in the desktop bundle.
+      {
+        find: /.*\/useDuckDB\.web$/,
+        replacement: path.resolve(__dirname, 'src/composables/useDuckDB.web.stub.ts'),
+      },
+      {
+        find: /.*\/webSampleData$/,
+        replacement: path.resolve(__dirname, 'src/lib/webSampleData.stub.ts'),
+      },
+    ],
+  },
 })

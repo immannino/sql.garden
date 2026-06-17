@@ -1,0 +1,21 @@
+driver_id,code,name,nationality,team,car_number
+1,VER,Max Verstappen,Dutch,Red Bull Racing,1
+2,PER,Sergio Perez,Mexican,Red Bull Racing,11
+3,ALO,Fernando Alonso,Spanish,Aston Martin,14
+4,HAM,Lewis Hamilton,British,Mercedes,44
+5,LEC,Charles Leclerc,Monégasque,Ferrari,16
+6,SAI,Carlos Sainz,Spanish,Ferrari,55
+7,NOR,Lando Norris,British,McLaren,4
+8,RUS,George Russell,British,Mercedes,63
+9,PIA,Oscar Piastri,Australian,McLaren,81
+10,STR,Lance Stroll,Canadian,Aston Martin,18
+11,GAS,Pierre Gasly,French,Alpine,10
+12,OCO,Esteban Ocon,French,Alpine,31
+13,ALB,Alexander Albon,Thai,Williams,23
+14,TSU,Yuki Tsunoda,Japanese,AlphaTauri,22
+15,BOT,Valtteri Bottas,Finnish,Alfa Romeo,77
+16,ZHO,Guanyu Zhou,Chinese,Alfa Romeo,24
+17,HUL,Nico Hülkenberg,German,Haas,27
+18,MAG,Kevin Magnussen,Danish,Haas,20
+19,SAR,Logan Sargeant,American,Williams,2
+20,RIC,Daniel Ricciardo,Australian,AlphaTauri,3

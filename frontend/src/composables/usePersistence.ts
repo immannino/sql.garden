@@ -2,11 +2,26 @@ import { watch } from 'vue'
 import { useDuckDB } from './useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import type { Column, ChartNode, MarkdownNode } from '../stores/schema'
+import { IS_DESKTOP } from '../lib/env'
+import { usePersistenceWeb } from './usePersistence.web'
+import {
+  SaveCanvasState,
+  LoadCanvasState,
+  SaveTableData,
+  DeleteTableData,
+  GetTableDataPath,
+  ImportFromPath,
+  // Legacy migration only — remove once all users are on SQLite persistence
+  ImportFileFromBase64,
+} from '../../wailsjs/go/main/App'
+import { toBase64 } from './useDuckDB'
 
-const CANVAS_KEY = 'sql-garden:canvas:v1'
+// ── Legacy IDB helpers (migration path only) ──────────────────────────────────
+
 const IDB_NAME = 'sql-garden'
 const IDB_STORE = 'tables'
 const IDB_VERSION = 1
+const LEGACY_CANVAS_KEY = 'sql-garden:canvas:v1'
 
 let _idb: IDBDatabase | null = null
 
@@ -20,14 +35,6 @@ function openIDB(): Promise<IDBDatabase> {
   })
 }
 
-function idbPut(key: string, value: Uint8Array): Promise<void> {
-  return openIDB().then((db) => new Promise((resolve, reject) => {
-    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(value, key)
-    req.onsuccess = () => resolve()
-    req.onerror = () => reject(req.error)
-  }))
-}
-
 function idbGet(key: string): Promise<Uint8Array | undefined> {
   return openIDB().then((db) => new Promise((resolve, reject) => {
     const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key)
@@ -36,27 +43,23 @@ function idbGet(key: string): Promise<Uint8Array | undefined> {
   }))
 }
 
-function idbDelete(key: string): Promise<void> {
-  return openIDB().then((db) => new Promise((resolve, reject) => {
-    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(key)
-    req.onsuccess = () => resolve()
-    req.onerror = () => reject(req.error)
-  }))
-}
+// ── Persistence ───────────────────────────────────────────────────────────────
 
-export function usePersistence() {
-  const { exec, query, registerFile, dropFile, copyTableToBuffer, getTableInfo } = useDuckDB()
+function useDesktopPersistence() {
+  const { query, getTableInfo } = useDuckDB()
   const schemaStore = useSchemaStore()
 
+  // Called after a new table is imported — writes its parquet snapshot to disk.
   async function saveTable(name: string): Promise<void> {
-    const buffer = await copyTableToBuffer(name)
-    await idbPut(name, buffer)
+    await SaveTableData(name)
   }
 
+  // Called when a table node is deleted from the canvas.
   async function deleteTable(name: string): Promise<void> {
-    await idbDelete(name)
+    await DeleteTableData(name)
   }
 
+  // Serialises the full canvas to SQLite. Called by startAutoSave on every change.
   function saveCanvas(): void {
     const payload = schemaStore.nodes.map((node) => {
       if (node.kind === 'table') {
@@ -71,39 +74,41 @@ export function usePersistence() {
         const { kind, id, name, x, y, color, content, w, h, viewMode } = node
         return { kind, id, name, x, y, color, content, w, h, viewMode }
       }
+      if (node.kind === 'section') {
+        const { kind, id, name, x, y, color, w, h } = node
+        return { kind, id, name, x, y, color, w, h }
+      }
       // chart
       const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode } = node
       return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode }
     })
-    localStorage.setItem(CANVAS_KEY, JSON.stringify(payload))
+    SaveCanvasState(JSON.stringify(payload)).catch(console.warn)
   }
 
-  async function loadAll(): Promise<boolean> {
-    const raw = localStorage.getItem(CANVAS_KEY)
-    if (!raw) return false
+  // ── Restore from SQLite ─────────────────────────────────────────────────────
 
+  async function restoreFromSQLite(raw: string): Promise<boolean> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let saved: any[]
     try { saved = JSON.parse(raw) } catch { return false }
     if (!saved.length) return false
 
+    // Always start from a clean slate — prevents accumulation on HMR or double-mount.
+    schemaStore.clear()
+
     let tablesRestored = 0
 
     for (const entry of saved) {
       const kind: string = entry.kind ?? 'table'
-
       try {
         if (kind === 'table') {
-          const parquet = await idbGet(entry.name)
-          if (!parquet) continue  // IDB missing — skip this table, may seed later
+          const parquetPath = await GetTableDataPath(entry.name)
+          if (!parquetPath) continue
 
-          const fileName = `__restore_${entry.name}.parquet`
-          await registerFile(fileName, parquet)
-          const safeFile  = fileName.replace(/'/g, "''")
+          // Import directly from the parquet file on disk — no base64, no IDB.
+          await ImportFromPath(parquetPath, entry.name)
+
           const safeTable = entry.name.replace(/"/g, '""')
-          await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM read_parquet('${safeFile}')`)
-          await dropFile(fileName)
-
           const [columns, countResult] = await Promise.all([
             getTableInfo(entry.name),
             query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
@@ -115,9 +120,87 @@ export function usePersistence() {
           schemaStore.setRowCount(entry.id, rowCount)
           tablesRestored++
         } else if (kind === 'query') {
-          // Query/chart nodes have no IDB dependency — always restore them.
-          // They do NOT count toward tablesRestored so a chart-only canvas
-          // still triggers the seed (the seed tables will coexist with them).
+          schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, isView: entry.isView ?? false, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          if (entry.isView && entry.sql?.trim()) {
+            import('../../wailsjs/go/main/App').then(({ CreateView }) =>
+              CreateView(entry.name, entry.sql).catch(console.warn)
+            )
+          }
+        } else if (kind === 'markdown') {
+          const m: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string } = {
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
+            content: entry.content ?? '', w: entry.w, h: entry.h, viewMode: entry.viewMode,
+          }
+          schemaStore.addMarkdownNode(m)
+        } else if (kind === 'chart') {
+          const c: Omit<ChartNode, 'kind' | 'color'> & { color?: string } = {
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
+            sourceId: entry.sourceId ?? null, sql: entry.sql ?? '',
+            chartType: entry.chartType ?? 'barY', xColumn: entry.xColumn ?? '', yColumn: entry.yColumn ?? '',
+            colorColumn: entry.colorColumn, labelColumn: entry.labelColumn,
+            w: entry.w, h: entry.h, viewMode: entry.viewMode,
+          }
+          schemaStore.addChartNode(c)
+        } else if (kind === 'section') {
+          schemaStore.addSection({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, w: entry.w ?? 400, h: entry.h ?? 300 })
+        }
+      } catch (e) {
+        console.warn(`Failed to restore node "${entry.name ?? entry.id}":`, e)
+      }
+    }
+
+    if (tablesRestored > 0) {
+      schemaStore.setColorCursor(saved.length)
+      return true
+    }
+    // Non-table nodes (query/chart/markdown) still count as a restored canvas.
+    if (saved.length > 0) {
+      schemaStore.setColorCursor(saved.length)
+      return true
+    }
+    return false
+  }
+
+  // ── One-time migration from localStorage + IDB → SQLite ────────────────────
+
+  async function migrateFromLegacy(): Promise<boolean> {
+    const localRaw = localStorage.getItem(LEGACY_CANVAS_KEY)
+    if (!localRaw) return false
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let saved: any[]
+    try { saved = JSON.parse(localRaw) } catch { return false }
+
+    schemaStore.clear()
+    let tablesRestored = 0
+
+    for (const entry of saved) {
+      const kind: string = entry.kind ?? 'table'
+      try {
+        if (kind === 'table') {
+          const parquet = await idbGet(entry.name)
+          if (!parquet) continue
+
+          // Restore via the old base64 path, then persist the parquet to disk.
+          await ImportFileFromBase64(
+            toBase64(parquet as unknown as Uint8Array<ArrayBuffer>),
+            `__restore_${entry.name}.parquet`,
+            entry.name,
+          )
+          await SaveTableData(entry.name)
+
+          const safeTable = entry.name.replace(/"/g, '""')
+          const [columns, countResult] = await Promise.all([
+            getTableInfo(entry.name),
+            query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
+          ])
+          const rowCount = Number(countResult.rows[0]?.n ?? 0)
+          const cols: Column[] = columns
+
+          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          schemaStore.setRowCount(entry.id, rowCount)
+          tablesRestored++
+        } else if (kind === 'query') {
           schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, w: entry.w, h: entry.h, viewMode: entry.viewMode })
         } else if (kind === 'markdown') {
           const m: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string } = {
@@ -134,20 +217,40 @@ export function usePersistence() {
             w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addChartNode(c)
+        } else if (kind === 'section') {
+          schemaStore.addSection({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, w: entry.w ?? 400, h: entry.h ?? 300 })
         }
       } catch (e) {
-        console.warn(`Failed to restore node "${entry.name ?? entry.id}":`, e)
+        console.warn(`Migration failed for "${entry.name ?? entry.id}":`, e)
       }
     }
 
-    // Only suppress the default seed when real table data came back from IDB.
-    // If tables were deleted (IDB empty) but chart/query nodes survived in
-    // localStorage, we still seed — those nodes will coexist with the defaults.
+    // Persist the migrated canvas to SQLite and clear the localStorage entry.
+    await SaveCanvasState(localRaw).catch(console.warn)
+    localStorage.removeItem(LEGACY_CANVAS_KEY)
+
     if (tablesRestored > 0) {
       schemaStore.setColorCursor(saved.length)
       return true
     }
+    if (saved.length > 0) {
+      schemaStore.setColorCursor(saved.length)
+      return true
+    }
     return false
+  }
+
+  // ── Public entry point ──────────────────────────────────────────────────────
+
+  async function loadAll(): Promise<boolean> {
+    // Primary: SQLite
+    const sqliteRaw = await LoadCanvasState()
+    if (sqliteRaw) {
+      return restoreFromSQLite(sqliteRaw)
+    }
+
+    // Fallback: migrate from localStorage + IDB (runs once, then deletes legacy data)
+    return migrateFromLegacy()
   }
 
   let _saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -164,4 +267,9 @@ export function usePersistence() {
   }
 
   return { loadAll, saveCanvas, saveTable, deleteTable, startAutoSave }
+}
+
+export function usePersistence() {
+  if (!IS_DESKTOP) return usePersistenceWeb()
+  return useDesktopPersistence()
 }

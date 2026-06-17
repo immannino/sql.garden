@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, watchEffect, onMounted, onUnmounted } from 'vue'
 import * as Plot from '@observablehq/plot'
-import type { ChartNode } from '../stores/schema'
+import type { ChartNode, ConditionRule } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
@@ -172,16 +172,91 @@ function setXColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { 
 function setYColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { yColumn: v }) }
 function setColorColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { colorColumn: v || undefined }) }
 function setLabelColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { labelColumn: v || undefined }) }
+function setChartLabel(v: string) { schemaStore.updateChartConfig(props.node.id, { chartLabel: v || undefined }) }
+function setTrueText(v: string)   { schemaStore.updateChartConfig(props.node.id, { trueText: v || undefined }) }
+function setFalseText(v: string)  { schemaStore.updateChartConfig(props.node.id, { falseText: v || undefined }) }
+function setTrueColor(v: string)  { schemaStore.updateChartConfig(props.node.id, { trueColor: v }) }
+function setFalseColor(v: string) { schemaStore.updateChartConfig(props.node.id, { falseColor: v }) }
+
+// ── Display-type guards ───────────────────────────────────────────────────────
+const isPlotType  = computed(() => !['number', 'boolean', 'conditional'].includes(props.node.chartType))
+const isStatType  = computed(() => props.node.chartType === 'number')
+const isBoolType  = computed(() => props.node.chartType === 'boolean')
+const isCondType  = computed(() => props.node.chartType === 'conditional')
+const isBadgeType = computed(() => isBoolType.value || isCondType.value)
+
+// ── Stat (number) computed ────────────────────────────────────────────────────
+const statValue = computed(() => {
+  const data = effectiveData.value
+  if (!data || !data.rows.length || !props.node.yColumn) return null
+  const raw = data.rows[0][props.node.yColumn]
+  return raw !== null && raw !== undefined ? Number(raw) : null
+})
+
+const formattedStatValue = computed(() => {
+  const v = statValue.value
+  if (v === null) return '—'
+  return Number.isFinite(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(v)
+})
+
+// ── Badge (boolean / conditional) computed ────────────────────────────────────
+const badgeState = computed((): { label: string; color: string } | null => {
+  const data = effectiveData.value
+  if (!data || !data.rows.length || !props.node.yColumn) return null
+  const raw = data.rows[0][props.node.yColumn]
+
+  if (isBoolType.value) {
+    const isTruthy =
+      raw !== null && raw !== undefined && raw !== false && raw !== 0 &&
+      raw !== '' && String(raw).toLowerCase() !== 'false'
+    return {
+      label:  isTruthy ? (props.node.trueText  ?? 'True')   : (props.node.falseText  ?? 'False'),
+      color:  isTruthy ? (props.node.trueColor ?? '#10b981') : (props.node.falseColor ?? '#ef4444'),
+    }
+  }
+
+  if (isCondType.value) {
+    const strVal = String(raw ?? '')
+    const conditions = props.node.conditions ?? []
+    const matched = conditions.find((c) => c.match === '*' || c.match === strVal)
+    return matched
+      ? { label: matched.label, color: matched.color }
+      : { label: strVal || 'Unknown', color: '#6b7280' }
+  }
+
+  return null
+})
+
+// ── Conditions editor (conditional type) ─────────────────────────────────────
+const localConditions = ref<ConditionRule[]>(
+  props.node.conditions ? props.node.conditions.map((c) => ({ ...c })) : [],
+)
+watch(() => props.node.conditions, (v) => { localConditions.value = v ? v.map((c) => ({ ...c })) : [] }, { deep: true })
+
+function saveConditions() {
+  schemaStore.updateChartConfig(props.node.id, { conditions: localConditions.value.map((c) => ({ ...c })) })
+}
+function addCondition() {
+  localConditions.value.push({ match: '', label: '', color: '#6366f1' })
+  saveConditions()
+}
+function removeCondition(i: number) {
+  localConditions.value.splice(i, 1)
+  saveConditions()
+}
 
 const CHART_TYPES: { key: ChartNode['chartType']; label: string }[] = [
-  { key: 'barY',  label: 'Bar' },
-  { key: 'barX',  label: 'Bar ↔' },
-  { key: 'lineY', label: 'Line' },
-  { key: 'areaY', label: 'Area' },
-  { key: 'dot',   label: 'Scatter' },
-  { key: 'cell',  label: 'Heatmap' },
-  { key: 'pie',   label: 'Pie' },
-  { key: 'donut', label: 'Donut' },
+  { key: 'barY',        label: 'Bar' },
+  { key: 'barX',        label: 'Bar ↔' },
+  { key: 'lineY',       label: 'Line' },
+  { key: 'areaY',       label: 'Area' },
+  { key: 'dot',         label: 'Scatter' },
+  { key: 'cell',        label: 'Heatmap' },
+  { key: 'pie',         label: 'Pie' },
+  { key: 'donut',       label: 'Donut' },
+  { key: 'number',      label: 'Number' },
+  { key: 'boolean',     label: 'Boolean' },
+  { key: 'conditional', label: 'State' },
 ]
 
 // ── Pie / donut helpers (no d3-shape dep needed) ──────────────────────────────
@@ -319,6 +394,8 @@ const chartContainer = ref<HTMLDivElement | null>(null)
 
 watchEffect(() => {
   if (!chartContainer.value) return
+  // number / boolean / conditional use their own display areas, not Observable Plot
+  if (!isPlotType.value) { chartContainer.value.innerHTML = ''; return }
 
   const data = effectiveData.value
   const { chartType, xColumn, yColumn, colorColumn, labelColumn, color } = props.node
@@ -410,6 +487,23 @@ onMounted(() => {
 onUnmounted(() => {
   if (chartContainer.value) chartContainer.value.innerHTML = ''
 })
+
+// ── CSV export ────────────────────────────────────────────────────────────────
+function downloadCsv() {
+  const d = effectiveData.value
+  if (!d || !d.rows.length) return
+  const esc = (v: unknown) => {
+    const s = v == null ? '' : String(v)
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const csv = [d.columns.join(','), ...d.rows.map(r => d.columns.map(c => esc(r[c])).join(','))].join('\n')
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
+    download: `${props.node.name}.csv`,
+  })
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
 </script>
 
 <template>
@@ -561,37 +655,121 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Column selectors -->
-      <div class="config-row">
-        <span class="config-label">X</span>
-        <select class="config-select" :value="node.xColumn" @change="setXColumn(($event.target as HTMLSelectElement).value)">
-          <option value="">— pick —</option>
-          <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-        </select>
-        <span class="config-label">Y</span>
-        <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
-          <option value="">— pick —</option>
-          <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-        </select>
-      </div>
+      <!-- Plot types: X / Y / Color / Label selectors -->
+      <template v-if="isPlotType">
+        <div class="config-row">
+          <span class="config-label">X</span>
+          <select class="config-select" :value="node.xColumn" @change="setXColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— pick —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+          <span class="config-label">Y</span>
+          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— pick —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+        </div>
+        <div v-if="availableColumns.length" class="config-row">
+          <span class="config-label">Color</span>
+          <select class="config-select" :value="node.colorColumn ?? ''" @change="setColorColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— none —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+          <span class="config-label">Label</span>
+          <select class="config-select" :value="node.labelColumn ?? ''" @change="setLabelColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— none —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+        </div>
+      </template>
 
-      <!-- Color + Label encoding (only when columns are available) -->
-      <div v-if="availableColumns.length" class="config-row">
-        <span class="config-label">Color</span>
-        <select class="config-select" :value="node.colorColumn ?? ''" @change="setColorColumn(($event.target as HTMLSelectElement).value)">
-          <option value="">— none —</option>
-          <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-        </select>
-        <span class="config-label">Label</span>
-        <select class="config-select" :value="node.labelColumn ?? ''" @change="setLabelColumn(($event.target as HTMLSelectElement).value)">
-          <option value="">— none —</option>
-          <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-        </select>
-      </div>
+      <!-- Number type config -->
+      <template v-if="isStatType">
+        <div class="config-row">
+          <span class="config-label">Value</span>
+          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— pick —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <span class="config-label">Label</span>
+          <input
+            class="config-input"
+            type="text"
+            :value="node.chartLabel ?? ''"
+            placeholder="optional subtitle"
+            @change="setChartLabel(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+      </template>
+
+      <!-- Boolean type config -->
+      <template v-if="isBoolType">
+        <div class="config-row">
+          <span class="config-label">Value</span>
+          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— pick —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+        </div>
+        <div class="config-row">
+          <span class="config-label">True</span>
+          <input class="config-input" type="text" :value="node.trueText ?? 'True'" placeholder="True" @change="setTrueText(($event.target as HTMLInputElement).value)" />
+          <input class="cond-color" type="color" :value="node.trueColor ?? '#10b981'" @change="setTrueColor(($event.target as HTMLInputElement).value)" />
+        </div>
+        <div class="config-row">
+          <span class="config-label">False</span>
+          <input class="config-input" type="text" :value="node.falseText ?? 'False'" placeholder="False" @change="setFalseText(($event.target as HTMLInputElement).value)" />
+          <input class="cond-color" type="color" :value="node.falseColor ?? '#ef4444'" @change="setFalseColor(($event.target as HTMLInputElement).value)" />
+        </div>
+      </template>
+
+      <!-- Conditional / State type config -->
+      <template v-if="isCondType">
+        <div class="config-row">
+          <span class="config-label">Value</span>
+          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
+            <option value="">— pick —</option>
+            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
+          </select>
+        </div>
+        <div class="cond-header">
+          <span class="config-label" style="width:auto">States</span>
+          <span class="cond-col-hint">match</span>
+          <span class="cond-col-hint">label</span>
+        </div>
+        <div class="cond-list">
+          <div v-for="(cond, i) in localConditions" :key="i" class="cond-row">
+            <input
+              class="config-input cond-match"
+              type="text"
+              :value="cond.match"
+              placeholder="value or *"
+              @input="localConditions[i].match = ($event.target as HTMLInputElement).value; saveConditions()"
+            />
+            <input
+              class="config-input cond-label"
+              type="text"
+              :value="cond.label"
+              placeholder="label"
+              @input="localConditions[i].label = ($event.target as HTMLInputElement).value; saveConditions()"
+            />
+            <input
+              class="cond-color"
+              type="color"
+              :value="cond.color"
+              @change="localConditions[i].color = ($event.target as HTMLInputElement).value; saveConditions()"
+            />
+            <button class="cond-remove" title="Remove" @mousedown.stop @click.stop="removeCondition(i)">×</button>
+          </div>
+        </div>
+        <button class="add-cond-btn" @mousedown.stop @click.stop="addCondition">+ Add state</button>
+      </template>
     </div>
 
-    <!-- Chart area (hidden only when collapsed) -->
-    <div v-if="!isCollapsed" class="chart-area" :style="{ height: `${(node.h ?? 180) + 24}px` }">
+    <!-- Observable Plot area (standard chart types) -->
+    <div v-if="!isCollapsed && isPlotType" class="chart-area" :style="{ height: `${(node.h ?? 180) + 24}px` }">
       <div ref="chartContainer" class="chart-plot" />
       <div v-if="!effectiveData || !node.xColumn || !node.yColumn" class="chart-placeholder">
         <svg viewBox="0 0 32 32" fill="none">
@@ -600,6 +778,53 @@ onUnmounted(() => {
         </svg>
         <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick X and Y columns above' }}</span>
       </div>
+    </div>
+
+    <!-- Number / stat display -->
+    <div v-if="!isCollapsed && isStatType" class="stat-area" :style="{ height: `${(node.h ?? 140) + 24}px` }">
+      <template v-if="statValue !== null">
+        <div class="stat-value">{{ formattedStatValue }}</div>
+        <div v-if="node.chartLabel" class="stat-label">{{ node.chartLabel }}</div>
+      </template>
+      <div v-else class="chart-placeholder">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M16 6v20M6 16h20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick a Value column above' }}</span>
+      </div>
+    </div>
+
+    <!-- Boolean / Conditional badge display -->
+    <div v-if="!isCollapsed && isBadgeType" class="badge-area" :style="{ height: `${(node.h ?? 120) + 24}px` }">
+      <template v-if="badgeState">
+        <div class="badge-display" :style="{ background: badgeState.color }">
+          <span class="badge-dot" />
+          <span class="badge-text">{{ badgeState.label }}</span>
+        </div>
+      </template>
+      <div v-else class="chart-placeholder">
+        <svg viewBox="0 0 32 32" fill="none">
+          <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 16l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick a Value column above' }}</span>
+      </div>
+    </div>
+
+    <!-- CSV export footer -->
+    <div
+      v-if="!isCollapsed && effectiveData && effectiveData.rows.length"
+      class="chart-footer"
+      @mousedown.stop
+    >
+      <span class="chart-footer-count">{{ effectiveData.rows.length.toLocaleString() }} rows</span>
+      <button class="export-csv-btn" title="Download as CSV" @click.stop="downloadCsv">
+        <svg viewBox="0 0 10 10" fill="none">
+          <path d="M5 1v6M2.5 5l2.5 2.5L7.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M1 8.5h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+        CSV
+      </button>
     </div>
 
     <!-- Resize handles (hidden when collapsed) -->
@@ -925,6 +1150,169 @@ onUnmounted(() => {
   text-align: center;
 }
 
+/* ── Config input (text fields) ──────────────────────────────────────────── */
+.config-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 3px 6px;
+  outline: none;
+  font-family: var(--font-mono);
+}
+.config-input:focus { border-color: var(--accent); }
+.config-input::placeholder { color: var(--text-muted); }
+
+.cond-color {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px;
+  cursor: pointer;
+  background: none;
+  flex-shrink: 0;
+}
+
+/* ── Conditions list ─────────────────────────────────────────────────────── */
+.cond-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 2px;
+}
+.cond-col-hint {
+  flex: 1;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  text-align: center;
+}
+.cond-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cond-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cond-match { flex: 0 0 36%; }
+.cond-label { flex: 1; }
+
+.cond-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.cond-remove:hover { background: rgba(248, 81, 73, 0.2); color: var(--error); }
+
+.add-cond-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+  font-family: inherit;
+  transition: opacity 0.15s;
+}
+.add-cond-btn:hover { opacity: 0.75; }
+
+/* ── Stat (number) display ───────────────────────────────────────────────── */
+.stat-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.stat-value {
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  text-align: center;
+}
+
+/* ── Badge (boolean / conditional) display ───────────────────────────────── */
+.badge-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.badge-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 28px;
+  border-radius: 10px;
+  width: 100%;
+  justify-content: center;
+  transition: background 0.3s;
+}
+
+.badge-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  flex-shrink: 0;
+  animation: badge-pulse 2.5s ease-in-out infinite;
+}
+
+.badge-text {
+  font-size: 18px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -958,4 +1346,40 @@ onUnmounted(() => {
 .chart-card.selected .rh-e,
 .chart-card.selected .rh-s,
 .chart-card.selected .rh-se { opacity: 1; }
+
+/* ── Chart footer ────────────────────────────────────────────────────────── */
+.chart-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 5px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.chart-footer-count {
+  flex: 1;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.export-csv-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.export-csv-btn svg { width: 9px; height: 9px; }
+.export-csv-btn:hover { background: var(--accent); color: #0d1117; border-color: var(--accent); }
 </style>

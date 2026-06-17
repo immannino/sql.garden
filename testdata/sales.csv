@@ -1,0 +1,25 @@
+month,product,region,revenue,units_sold
+2024-01,Widget A,North,12500.00,250
+2024-01,Widget B,North,8300.00,166
+2024-01,Widget A,South,9800.00,196
+2024-01,Widget B,South,6100.00,122
+2024-02,Widget A,North,13200.00,264
+2024-02,Widget B,North,7900.00,158
+2024-02,Widget A,South,10500.00,210
+2024-02,Widget B,South,6800.00,136
+2024-03,Widget A,North,14800.00,296
+2024-03,Widget B,North,9200.00,184
+2024-03,Widget A,South,11300.00,226
+2024-03,Widget B,South,7400.00,148
+2024-04,Widget A,North,16100.00,322
+2024-04,Widget B,North,10500.00,210
+2024-04,Widget A,South,12600.00,252
+2024-04,Widget B,South,8200.00,164
+2024-05,Widget A,North,15400.00,308
+2024-05,Widget B,North,9800.00,196
+2024-05,Widget A,South,13100.00,262
+2024-05,Widget B,South,8700.00,174
+2024-06,Widget A,North,17200.00,344
+2024-06,Widget B,North,11300.00,226
+2024-06,Widget A,South,14500.00,290
+2024-06,Widget B,South,9400.00,188

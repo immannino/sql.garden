@@ -1,0 +1,11 @@
+user_id,name,email,city,country,plan,joined
+1,Alice Chen,alice@example.com,San Francisco,USA,pro,2023-01-15
+2,Bob Smith,bob@example.com,New York,USA,starter,2023-02-20
+3,Carol Davis,carol@example.com,London,UK,pro,2023-03-05
+4,Dave Wilson,dave@example.com,Toronto,Canada,starter,2023-04-10
+5,Eve Martinez,eve@example.com,Madrid,Spain,enterprise,2023-05-22
+6,Frank Lee,frank@example.com,Tokyo,Japan,pro,2023-06-01
+7,Grace Kim,grace@example.com,Seoul,S. Korea,starter,2023-07-14
+8,Hiro Tanaka,hiro@example.com,Osaka,Japan,pro,2023-08-03
+9,Isla Brown,isla@example.com,Sydney,Australia,enterprise,2023-09-19
+10,Jack Taylor,jack@example.com,Chicago,USA,starter,2023-10-07
