@@ -19,7 +19,7 @@ name: Deploy Web Playground
 
 on:
   push:
-    branches: [main]
+    branches: [main, wails]
   workflow_dispatch:
 
 permissions:
