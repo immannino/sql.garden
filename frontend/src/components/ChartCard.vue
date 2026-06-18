@@ -560,7 +560,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Observable Plot area -->
-    <div v-if="!isCollapsed && isPlotType" class="chart-area" :style="{ height: `${(node.h ?? 180) + 24}px` }">
+    <div v-if="!isCollapsed && isPlotType" class="chart-area" :style="{ height: `${(node.h ?? 180) + 36}px` }">
       <div ref="chartContainer" class="chart-plot" />
       <div v-if="!effectiveData || !node.xColumn || !node.yColumn" class="chart-placeholder">
         <svg viewBox="0 0 32 32" fill="none">
@@ -783,7 +783,7 @@ onUnmounted(() => {
 .chart-area {
   position: relative;
   min-height: 100px;
-  padding: 8px 6px;
+  padding: 28px 6px 8px;
   display: flex;
   align-items: center;
   justify-content: center;

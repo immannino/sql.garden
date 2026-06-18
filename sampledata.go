@@ -325,11 +325,19 @@ FROM mkt_prices
 GROUP BY ticker
 ORDER BY avg_daily_vol_m DESC`
 
-	volatilitySQL := `SELECT
+	volatilitySQL := `WITH daily_returns AS (
+    SELECT
+        ticker,
+        close / LAG(close) OVER (PARTITION BY ticker ORDER BY date) - 1 AS daily_return
+    FROM mkt_prices
+)
+SELECT
     ticker,
-    ROUND(STDDEV(close / LAG(close) OVER (PARTITION BY ticker ORDER BY date) - 1) * SQRT(252) * 100, 1) AS annual_vol_pct
-FROM mkt_prices
-ORDER BY annual_vol_pct DESC NULLS LAST
+    ROUND(STDDEV(daily_return) * SQRT(252) * 100, 1) AS annual_vol_pct
+FROM daily_returns
+WHERE daily_return IS NOT NULL
+GROUP BY ticker
+ORDER BY annual_vol_pct DESC
 LIMIT 10`
 
 	const (
