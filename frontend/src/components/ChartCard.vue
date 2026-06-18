@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, watchEffect, onMounted, onUnmounted } from 'vue'
 import * as Plot from '@observablehq/plot'
-import type { ChartNode, ConditionRule } from '../stores/schema'
+import type { ChartNode, TableColumnConfig } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
+import { useChartResults } from '../composables/useChartResults'
+import { useChartPanel } from '../composables/useChartPanel'
 import { useAppReady } from '../composables/useAppReady'
+import { exportData, type ExportFormat } from '../lib/exportData'
 
 const props = defineProps<{ node: ChartNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -15,12 +18,14 @@ const emit = defineEmits<{
 
 const schemaStore = useSchemaStore()
 const { query } = useDuckDB()
-const { results: queryResults, setResult } = useQueryResults()
+const { results: queryResults } = useQueryResults()
+const { chartResults, setChartResult } = useChartResults()
+const { openPanel } = useChartPanel()
 const { isAppReady } = useAppReady()
 
 // ── View mode ─────────────────────────────────────────────────────────────────
-const isCollapsed  = computed(() => props.node.viewMode === 'collapsed')
-const isChartOnly  = computed(() => props.node.viewMode === 'chart-only')
+const isCollapsed = computed(() => props.node.viewMode === 'collapsed')
+const isChartOnly = computed(() => props.node.viewMode === 'chart-only')
 
 function toggleCollapsed(e: MouseEvent) {
   e.stopPropagation()
@@ -85,54 +90,42 @@ function onRenameKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') { isRenaming.value = false }
 }
 
-// ── Data source ───────────────────────────────────────────────────────────────
-const queryNodes = computed(() =>
-  schemaStore.nodes.filter((n) => n.kind === 'query'),
-)
-
-const localSql = ref(props.node.sql)
-watch(() => props.node.sql, (v) => { if (v !== localSql.value) localSql.value = v })
-
-const inlineResult = ref<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null)
-const inlineError = ref<string | null>(null)
-const isRunningInline = ref(false)
+// ── Data source & execution ───────────────────────────────────────────────────
+const isRunning = ref(false)
 
 const effectiveData = computed(() => {
   if (props.node.sourceId) {
     const r = queryResults[props.node.sourceId]
     return (r && !r.error && !r.isRunning) ? r : null
   }
-  return inlineResult.value
+  const r = chartResults[props.node.id]
+  return (r && !r.error && !r.isRunning) ? r : null
 })
 
-const availableColumns = computed(() => effectiveData.value?.columns ?? [])
-
-async function runInline(e?: MouseEvent) {
-  e?.stopPropagation()
-  const sql = localSql.value.trim()
-  if (!sql || isRunningInline.value) return
-  isRunningInline.value = true
-  inlineError.value = null
-  schemaStore.updateChartConfig(props.node.id, { sql })
+async function runInline() {
+  const sql = props.node.sql.trim()
+  if (!sql || isRunning.value) return
+  isRunning.value = true
+  setChartResult(props.node.id, { columns: [], rows: [], error: null, isRunning: true })
   try {
     const result = await query(sql)
-    inlineResult.value = { columns: result.columns, rows: result.rows }
+    setChartResult(props.node.id, { columns: result.columns, rows: result.rows, error: null, isRunning: false })
   } catch (err) {
-    inlineError.value = err instanceof Error ? err.message : String(err)
-    inlineResult.value = null
+    setChartResult(props.node.id, { columns: [], rows: [], error: err instanceof Error ? err.message : String(err), isRunning: false })
   } finally {
-    isRunningInline.value = false
+    isRunning.value = false
   }
 }
 
 async function runLinked() {
   const sid = props.node.sourceId
-  if (!sid || isRunningInline.value) return
+  if (!sid || isRunning.value) return
   const sourceNode = schemaStore.nodes.find((n) => n.id === sid && n.kind === 'query')
   if (!sourceNode || sourceNode.kind !== 'query') return
   const sql = sourceNode.sql.trim()
   if (!sql) return
-  isRunningInline.value = true
+  isRunning.value = true
+  const { setResult } = useQueryResults()
   setResult(sid, { columns: [], rows: [], error: null, isRunning: true })
   try {
     const result = await query(sql)
@@ -141,49 +134,18 @@ async function runLinked() {
     const msg = err instanceof Error ? err.message : String(err)
     setResult(sid, { columns: [], rows: [], error: msg, isRunning: false })
   } finally {
-    isRunningInline.value = false
+    isRunning.value = false
   }
 }
 
-function createQuery() {
-  const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
-  schemaStore.addQueryNode({
-    id: `query_${Date.now()}`,
-    name: `query_${n}`,
-    x: props.node.x + (props.node.w ?? 340) + 40,
-    y: props.node.y,
-    sql: props.node.sql,
-  })
-}
-
-function onInlineSqlKeydown(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runInline() }
-}
-
-function setSource(val: string) {
-  schemaStore.updateChartConfig(props.node.id, { sourceId: val === '__inline__' ? null : val })
-}
-
-function setChartType(t: ChartNode['chartType']) {
-  schemaStore.updateChartConfig(props.node.id, { chartType: t })
-}
-
-function setXColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { xColumn: v }) }
-function setYColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { yColumn: v }) }
-function setColorColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { colorColumn: v || undefined }) }
-function setLabelColumn(v: string) { schemaStore.updateChartConfig(props.node.id, { labelColumn: v || undefined }) }
-function setChartLabel(v: string) { schemaStore.updateChartConfig(props.node.id, { chartLabel: v || undefined }) }
-function setTrueText(v: string)   { schemaStore.updateChartConfig(props.node.id, { trueText: v || undefined }) }
-function setFalseText(v: string)  { schemaStore.updateChartConfig(props.node.id, { falseText: v || undefined }) }
-function setTrueColor(v: string)  { schemaStore.updateChartConfig(props.node.id, { trueColor: v }) }
-function setFalseColor(v: string) { schemaStore.updateChartConfig(props.node.id, { falseColor: v }) }
-
 // ── Display-type guards ───────────────────────────────────────────────────────
-const isPlotType  = computed(() => !['number', 'boolean', 'conditional'].includes(props.node.chartType))
-const isStatType  = computed(() => props.node.chartType === 'number')
-const isBoolType  = computed(() => props.node.chartType === 'boolean')
-const isCondType  = computed(() => props.node.chartType === 'conditional')
-const isBadgeType = computed(() => isBoolType.value || isCondType.value)
+const isPlotType    = computed(() => !['number', 'boolean', 'conditional', 'mermaid', 'table'].includes(props.node.chartType))
+const isStatType    = computed(() => props.node.chartType === 'number')
+const isBoolType    = computed(() => props.node.chartType === 'boolean')
+const isCondType    = computed(() => props.node.chartType === 'conditional')
+const isBadgeType   = computed(() => isBoolType.value || isCondType.value)
+const isMermaidType = computed(() => props.node.chartType === 'mermaid')
+const isTableType   = computed(() => props.node.chartType === 'table')
 
 // ── Stat (number) computed ────────────────────────────────────────────────────
 const statValue = computed(() => {
@@ -199,6 +161,47 @@ const formattedStatValue = computed(() => {
   return Number.isFinite(v) ? v.toLocaleString(undefined, { maximumFractionDigits: 6 }) : String(v)
 })
 
+// ── Condition rule evaluator ──────────────────────────────────────────────────
+function evalConditionMatch(match: string, raw: unknown): boolean {
+  const t = match.trim()
+  if (t === '*') return true
+
+  const str = String(raw ?? '')
+  const num = Number(raw)
+  const hasNum = raw !== null && raw !== undefined && raw !== '' && !isNaN(num)
+
+  // Comparison operators: >, >=, <, <=, !=, =
+  const cmp = t.match(/^(>=|<=|!=|>|<|=)\s*(.+)$/)
+  if (cmp) {
+    const op = cmp[1]
+    const rhs = cmp[2].trim()
+    const rhsNum = Number(rhs)
+    const numericCmp = hasNum && !isNaN(rhsNum)
+    switch (op) {
+      case '>':  return numericCmp ? num > rhsNum  : str > rhs
+      case '>=': return numericCmp ? num >= rhsNum : str >= rhs
+      case '<':  return numericCmp ? num < rhsNum  : str < rhs
+      case '<=': return numericCmp ? num <= rhsNum : str <= rhs
+      case '!=': return numericCmp ? num !== rhsNum : str !== rhs
+      case '=':  return numericCmp ? num === rhsNum : str === rhs
+    }
+  }
+
+  // String ops (case-insensitive)
+  const kw = t.match(/^(contains|starts?|ends?)\s+(.+)$/i)
+  if (kw) {
+    const [, op, operand] = kw
+    const hay = str.toLowerCase()
+    const needle = operand.trim().toLowerCase()
+    if (/^contains$/i.test(op)) return hay.includes(needle)
+    if (/^starts?$/i.test(op))  return hay.startsWith(needle)
+    if (/^ends?$/i.test(op))    return hay.endsWith(needle)
+  }
+
+  // Bare value → exact match
+  return str === t
+}
+
 // ── Badge (boolean / conditional) computed ────────────────────────────────────
 const badgeState = computed((): { label: string; color: string } | null => {
   const data = effectiveData.value
@@ -210,15 +213,15 @@ const badgeState = computed((): { label: string; color: string } | null => {
       raw !== null && raw !== undefined && raw !== false && raw !== 0 &&
       raw !== '' && String(raw).toLowerCase() !== 'false'
     return {
-      label:  isTruthy ? (props.node.trueText  ?? 'True')   : (props.node.falseText  ?? 'False'),
-      color:  isTruthy ? (props.node.trueColor ?? '#10b981') : (props.node.falseColor ?? '#ef4444'),
+      label: isTruthy ? (props.node.trueText  ?? 'True')    : (props.node.falseText  ?? 'False'),
+      color: isTruthy ? (props.node.trueColor ?? '#10b981') : (props.node.falseColor ?? '#ef4444'),
     }
   }
 
   if (isCondType.value) {
-    const strVal = String(raw ?? '')
     const conditions = props.node.conditions ?? []
-    const matched = conditions.find((c) => c.match === '*' || c.match === strVal)
+    const matched = conditions.find((c) => evalConditionMatch(c.match, raw))
+    const strVal = String(raw ?? '')
     return matched
       ? { label: matched.label, color: matched.color }
       : { label: strVal || 'Unknown', color: '#6b7280' }
@@ -227,39 +230,73 @@ const badgeState = computed((): { label: string; color: string } | null => {
   return null
 })
 
-// ── Conditions editor (conditional type) ─────────────────────────────────────
-const localConditions = ref<ConditionRule[]>(
-  props.node.conditions ? props.node.conditions.map((c) => ({ ...c })) : [],
-)
-watch(() => props.node.conditions, (v) => { localConditions.value = v ? v.map((c) => ({ ...c })) : [] }, { deep: true })
+// ── Table type helpers ────────────────────────────────────────────────────────
 
-function saveConditions() {
-  schemaStore.updateChartConfig(props.node.id, { conditions: localConditions.value.map((c) => ({ ...c })) })
-}
-function addCondition() {
-  localConditions.value.push({ match: '', label: '', color: '#6366f1' })
-  saveConditions()
-}
-function removeCondition(i: number) {
-  localConditions.value.splice(i, 1)
-  saveConditions()
+const visibleColumns = computed(() => {
+  const data = effectiveData.value
+  if (!data) return []
+  const cfgs = props.node.tableColumnConfigs ?? {}
+  return data.columns.filter((c) => !cfgs[c]?.hidden)
+})
+
+function relativeTime(d: Date): string {
+  const diff = Date.now() - d.getTime()
+  const abs = Math.abs(diff)
+  if (abs < 60_000) return 'just now'
+  const sign = diff < 0 ? 'in ' : ''
+  const suffix = diff < 0 ? '' : ' ago'
+  if (abs < 3_600_000)     return `${sign}${Math.round(abs / 60_000)}m${suffix}`
+  if (abs < 86_400_000)    return `${sign}${Math.round(abs / 3_600_000)}h${suffix}`
+  if (abs < 2_592_000_000) return `${sign}${Math.round(abs / 86_400_000)}d${suffix}`
+  return `${sign}${Math.round(abs / 2_592_000_000)}mo${suffix}`
 }
 
-const CHART_TYPES: { key: ChartNode['chartType']; label: string }[] = [
-  { key: 'barY',        label: 'Bar' },
-  { key: 'barX',        label: 'Bar ↔' },
-  { key: 'lineY',       label: 'Line' },
-  { key: 'areaY',       label: 'Area' },
-  { key: 'dot',         label: 'Scatter' },
-  { key: 'cell',        label: 'Heatmap' },
-  { key: 'pie',         label: 'Pie' },
-  { key: 'donut',       label: 'Donut' },
-  { key: 'number',      label: 'Number' },
-  { key: 'boolean',     label: 'Boolean' },
-  { key: 'conditional', label: 'State' },
-]
+function formatCell(value: unknown, cfg: TableColumnConfig | undefined): string {
+  if (value === null || value === undefined) return '—'
+  const fmt = cfg?.formatType ?? 'auto'
 
-// ── Pie / donut helpers (no d3-shape dep needed) ──────────────────────────────
+  if (fmt === 'number' || (fmt === 'auto' && typeof value === 'number')) {
+    const n = Number(value)
+    if (isNaN(n)) return String(value)
+    const dec = cfg?.decimals ?? (fmt === 'number' ? 0 : undefined)
+    return n.toLocaleString(undefined, dec !== undefined ? { minimumFractionDigits: dec, maximumFractionDigits: dec } : undefined)
+  }
+  if (fmt === 'currency') {
+    const n = Number(value); if (isNaN(n)) return String(value)
+    const dec = cfg?.decimals ?? 2
+    const sym = cfg?.currencySymbol ?? '$'
+    return sym + n.toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec })
+  }
+  if (fmt === 'percent') {
+    const n = Number(value); if (isNaN(n)) return String(value)
+    const dec = cfg?.decimals ?? 1
+    return (n * 100).toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec }) + '%'
+  }
+  if (fmt === 'date') {
+    const d = value instanceof Date ? value : new Date(String(value))
+    if (isNaN(d.getTime())) return String(value)
+    switch (cfg?.datePattern ?? 'date') {
+      case 'datetime': return d.toLocaleString()
+      case 'iso':      return d.toISOString().slice(0, 10)
+      case 'us':       return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`
+      case 'eu':       return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`
+      case 'relative': return relativeTime(d)
+      default:         return d.toLocaleDateString()
+    }
+  }
+  if (fmt === 'text') return String(value)
+  // auto — detect Date objects and ISO-ish strings
+  if (value instanceof Date) return value.toLocaleString()
+  return String(value)
+}
+
+function cellAlign(cfg: TableColumnConfig | undefined): string {
+  if (cfg?.align) return cfg.align
+  const ft = cfg?.formatType ?? 'auto'
+  return ft === 'number' || ft === 'currency' || ft === 'percent' ? 'right' : 'left'
+}
+
+// ── Pie / donut SVG ───────────────────────────────────────────────────────────
 const PIE_PALETTE = [
   '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
   '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
@@ -269,11 +306,7 @@ function polarXY(cx: number, cy: number, r: number, angle: number): [number, num
   return [cx + r * Math.sin(angle), cy - r * Math.cos(angle)]
 }
 
-function arcPath(
-  cx: number, cy: number,
-  outerR: number, innerR: number,
-  startAngle: number, endAngle: number,
-): string {
+function arcPath(cx: number, cy: number, outerR: number, innerR: number, startAngle: number, endAngle: number): string {
   const [ox1, oy1] = polarXY(cx, cy, outerR, startAngle)
   const [ox2, oy2] = polarXY(cx, cy, outerR, endAngle)
   const large = endAngle - startAngle > Math.PI ? 1 : 0
@@ -285,43 +318,28 @@ function arcPath(
   return `M ${ox1} ${oy1} A ${outerR} ${outerR} 0 ${large} 1 ${ox2} ${oy2} L ${ix2} ${iy2} A ${innerR} ${innerR} 0 ${large} 0 ${ix1} ${iy1} Z`
 }
 
-function buildPieSvg(
-  rows: Record<string, unknown>[],
-  xColumn: string,
-  yColumn: string,
-  width: number,
-  height: number,
-  isDonut: boolean,
-): SVGSVGElement {
+function buildPieSvg(rows: Record<string, unknown>[], xColumn: string, yColumn: string, width: number, height: number, isDonut: boolean): SVGSVGElement {
   const ns = 'http://www.w3.org/2000/svg'
   const legendW = 110
   const chartW = Math.max(60, width - legendW)
   const margin = 12
   const r = Math.min(chartW, height) / 2 - margin
   const innerR = isDonut ? r * 0.48 : 0
-  const cx = chartW / 2
-  const cy = height / 2
-
+  const cx = chartW / 2, cy = height / 2
   const total = rows.reduce((s, d) => s + (Number(d[yColumn]) || 0), 0)
-
   const svg = document.createElementNS(ns, 'svg')
   svg.setAttribute('width', String(width))
   svg.setAttribute('height', String(height))
   Object.assign(svg.style, { overflow: 'visible', display: 'block' })
-
   const g = document.createElementNS(ns, 'g')
   svg.appendChild(g)
-
   let angle = 0
   const slices = rows.map((row, i) => {
     const value = Number(row[yColumn]) || 0
     const span = total > 0 ? (value / total) * 2 * Math.PI : 0
-    const start = angle
-    angle += span
+    const start = angle; angle += span
     return { row, value, span, start, end: angle, color: PIE_PALETTE[i % PIE_PALETTE.length] }
   })
-
-  // Slices
   slices.forEach((s) => {
     const path = document.createElementNS(ns, 'path')
     path.setAttribute('d', arcPath(cx, cy, r, innerR, s.start, s.end))
@@ -329,63 +347,42 @@ function buildPieSvg(
     path.setAttribute('stroke', 'rgba(0,0,0,0.25)')
     path.setAttribute('stroke-width', '1')
     g.appendChild(path)
-
-    // Label at centroid for slices ≥ 20°
     if (s.span > 0.35 && r > 40) {
       const midAngle = s.start + s.span / 2
       const labelR = innerR > 0 ? (innerR + r) / 2 : r * 0.65
       const [lx, ly] = polarXY(cx, cy, labelR, midAngle)
       const pct = total > 0 ? Math.round((s.value / total) * 100) : 0
       const text = document.createElementNS(ns, 'text')
-      text.setAttribute('x', String(lx))
-      text.setAttribute('y', String(ly))
-      text.setAttribute('text-anchor', 'middle')
-      text.setAttribute('dominant-baseline', 'middle')
-      text.setAttribute('font-size', '9.5')
-      text.setAttribute('fill', '#e2e8f0')
-      text.setAttribute('pointer-events', 'none')
-      text.textContent = `${pct}%`
+      text.setAttribute('x', String(lx)); text.setAttribute('y', String(ly))
+      text.setAttribute('text-anchor', 'middle'); text.setAttribute('dominant-baseline', 'middle')
+      text.setAttribute('font-size', '9.5'); text.setAttribute('fill', '#e2e8f0')
+      text.setAttribute('pointer-events', 'none'); text.textContent = `${pct}%`
       g.appendChild(text)
     }
   })
-
-  // Donut center: total
   if (isDonut && r > 30) {
     const label = document.createElementNS(ns, 'text')
-    label.setAttribute('x', String(cx))
-    label.setAttribute('y', String(cy))
-    label.setAttribute('text-anchor', 'middle')
-    label.setAttribute('dominant-baseline', 'middle')
-    label.setAttribute('font-size', '11')
-    label.setAttribute('fill', '#8b949e')
+    label.setAttribute('x', String(cx)); label.setAttribute('y', String(cy))
+    label.setAttribute('text-anchor', 'middle'); label.setAttribute('dominant-baseline', 'middle')
+    label.setAttribute('font-size', '11'); label.setAttribute('fill', '#8b949e')
     label.textContent = total.toLocaleString()
     g.appendChild(label)
   }
-
-  // Legend
-  const legendX = chartW + 8
-  const rowH = 15
+  const legendX = chartW + 8, rowH = 15
   const legendStartY = Math.max(4, (height - slices.length * rowH) / 2)
   slices.forEach((s, i) => {
     const gy = legendStartY + i * rowH
     const swatch = document.createElementNS(ns, 'rect')
-    swatch.setAttribute('x', String(legendX))
-    swatch.setAttribute('y', String(gy + 2))
-    swatch.setAttribute('width', '8')
-    swatch.setAttribute('height', '8')
-    swatch.setAttribute('rx', '1.5')
-    swatch.setAttribute('fill', s.color)
+    swatch.setAttribute('x', String(legendX)); swatch.setAttribute('y', String(gy + 2))
+    swatch.setAttribute('width', '8'); swatch.setAttribute('height', '8')
+    swatch.setAttribute('rx', '1.5'); swatch.setAttribute('fill', s.color)
     svg.appendChild(swatch)
-
-    const label = document.createElementNS(ns, 'text')
-    label.setAttribute('x', String(legendX + 11))
-    label.setAttribute('y', String(gy + 10))
-    label.setAttribute('font-size', '9.5')
-    label.setAttribute('fill', '#8b949e')
-    label.textContent = String(s.row[xColumn] ?? '').slice(0, 12)
-    svg.appendChild(label)
+    const lbl = document.createElementNS(ns, 'text')
+    lbl.setAttribute('x', String(legendX + 11)); lbl.setAttribute('y', String(gy + 10))
+    lbl.setAttribute('font-size', '9.5'); lbl.setAttribute('fill', '#8b949e')
+    lbl.textContent = String(s.row[xColumn] ?? '').slice(0, 12)
+    svg.appendChild(lbl)
   })
-
   return svg
 }
 
@@ -394,86 +391,80 @@ const chartContainer = ref<HTMLDivElement | null>(null)
 
 watchEffect(() => {
   if (!chartContainer.value) return
-  // number / boolean / conditional use their own display areas, not Observable Plot
   if (!isPlotType.value) { chartContainer.value.innerHTML = ''; return }
-
   const data = effectiveData.value
   const { chartType, xColumn, yColumn, colorColumn, labelColumn, color } = props.node
-
-  if (!data || !xColumn || !yColumn) {
-    chartContainer.value.innerHTML = ''
-    return
-  }
-
+  if (!data || !xColumn || !yColumn) { chartContainer.value.innerHTML = ''; return }
   try {
     const plotW = (props.node.w ?? 340) - 32
     const plotH = props.node.h ?? 180
-
-    // Pie / donut — custom SVG renderer (no d3-shape needed)
     if (chartType === 'pie' || chartType === 'donut') {
       const el = buildPieSvg(data.rows, xColumn, yColumn, plotW, plotH, chartType === 'donut')
-      chartContainer.value.replaceChildren(el)
-      return
+      chartContainer.value.replaceChildren(el); return
     }
-
-    // Observable Plot charts
-    const fill   = colorColumn ?? color
-    const stroke = colorColumn ?? color
+    const fill = colorColumn ?? color, stroke = colorColumn ?? color
     const marks: Plot.Markish[] = []
-
     switch (chartType) {
-      case 'barY':
-        marks.push(Plot.barY(data.rows, { x: xColumn, y: yColumn, fill }))
-        marks.push(Plot.ruleY([0]))
-        break
-      case 'barX':
-        marks.push(Plot.barX(data.rows, { x: xColumn, y: yColumn, fill }))
-        marks.push(Plot.ruleX([0]))
-        break
-      case 'lineY':
-        marks.push(Plot.lineY(data.rows, { x: xColumn, y: yColumn, stroke }))
-        marks.push(Plot.ruleY([0]))
-        break
-      case 'areaY':
-        marks.push(Plot.areaY(data.rows, { x: xColumn, y: yColumn, fill, fillOpacity: 0.4, stroke }))
-        marks.push(Plot.ruleY([0]))
-        break
-      case 'cell':
-        marks.push(Plot.cell(data.rows, { x: xColumn, y: yColumn, fill }))
-        break
-      default: // dot / scatter
-        marks.push(Plot.dot(data.rows, { x: xColumn, y: yColumn, fill }))
-        break
+      case 'barY':  marks.push(Plot.barY(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleY([0])); break
+      case 'barX':  marks.push(Plot.barX(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleX([0])); break
+      case 'lineY': marks.push(Plot.lineY(data.rows, { x: xColumn, y: yColumn, stroke }), Plot.ruleY([0])); break
+      case 'areaY': marks.push(Plot.areaY(data.rows, { x: xColumn, y: yColumn, fill, fillOpacity: 0.4, stroke }), Plot.ruleY([0])); break
+      case 'cell':  marks.push(Plot.cell(data.rows, { x: xColumn, y: yColumn, fill })); break
+      default:      marks.push(Plot.dot(data.rows, { x: xColumn, y: yColumn, fill })); break
     }
-
-    if (labelColumn) {
-      marks.push(Plot.text(data.rows, { x: xColumn, y: yColumn, text: labelColumn, fontSize: 9, fill: 'currentColor', dy: -6 }))
-    }
-
+    if (labelColumn) marks.push(Plot.text(data.rows, { x: xColumn, y: yColumn, text: labelColumn, fontSize: 9, fill: 'currentColor', dy: -6 }))
     const el = Plot.plot({
-      width: plotW,
-      height: plotH,
-      marginBottom: 36,
-      marginLeft: 42,
+      width: plotW, height: plotH, marginBottom: 36, marginLeft: 42,
       color: colorColumn ? { legend: true } : undefined,
-      style: {
-        background: 'none',
-        color: '#8b949e',
-        fontSize: '10px',
-        overflow: 'visible',
-      },
+      style: { background: 'none', color: '#8b949e', fontSize: '10px', overflow: 'visible' },
       marks,
     })
-
     chartContainer.value.replaceChildren(el)
   } catch {
     chartContainer.value.innerHTML = `<p class="chart-err">Can't render — check column types</p>`
   }
 })
 
+// ── Mermaid rendering ─────────────────────────────────────────────────────────
+const mermaidContainer = ref<HTMLDivElement | null>(null)
+let _mermaidReady = false
+
+async function renderMermaid(code: string, el: HTMLDivElement) {
+  if (!code.trim()) { el.innerHTML = '<p class="chart-placeholder-msg">Enter a diagram in the properties panel</p>'; return }
+  try {
+    if (!_mermaidReady) {
+      const { default: mermaid } = await import('mermaid')
+      mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' })
+      _mermaidReady = true
+    }
+    const { default: mermaid } = await import('mermaid')
+    const safeId = `mm_${props.node.id.replace(/[^a-z0-9]/gi, '_')}`
+    const { svg } = await mermaid.render(safeId, code)
+    el.innerHTML = svg
+  } catch (err) {
+    el.innerHTML = `<p class="chart-err">${err instanceof Error ? err.message.split('\n')[0] : String(err)}</p>`
+  }
+}
+
+watch(
+  [isMermaidType, () => props.node.mermaidCode, mermaidContainer],
+  async ([isMermaid, code, el]) => {
+    if (!isMermaid || !el) return
+    await renderMermaid(code ?? '', el)
+  },
+  { immediate: true },
+)
+
+// ── Export ────────────────────────────────────────────────────────────────────
+function onExport(fmt: ExportFormat) {
+  const d = effectiveData.value
+  if (!d || !d.rows.length) return
+  exportData(fmt, d.columns, d.rows as Record<string, unknown>[], props.node.name)
+}
+
+// ── Auto-run on mount ─────────────────────────────────────────────────────────
 onMounted(() => {
   if (props.node.sourceId) {
-    // Auto-run linked query if no cached result yet
     if (queryResults[props.node.sourceId]) return
     if (isAppReady.value) { runLinked(); return }
     const stop = watch(isAppReady, (ready) => { if (ready) { stop(); runLinked() } })
@@ -487,23 +478,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (chartContainer.value) chartContainer.value.innerHTML = ''
 })
-
-// ── CSV export ────────────────────────────────────────────────────────────────
-function downloadCsv() {
-  const d = effectiveData.value
-  if (!d || !d.rows.length) return
-  const esc = (v: unknown) => {
-    const s = v == null ? '' : String(v)
-    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
-  }
-  const csv = [d.columns.join(','), ...d.rows.map(r => d.columns.map(c => esc(r[c])).join(','))].join('\n')
-  const a = Object.assign(document.createElement('a'), {
-    href: URL.createObjectURL(new Blob([csv], { type: 'text/csv' })),
-    download: `${props.node.name}.csv`,
-  })
-  a.click()
-  URL.revokeObjectURL(a.href)
-}
 </script>
 
 <template>
@@ -533,10 +507,26 @@ function downloadCsv() {
         {{ node.name }}
       </span>
 
+      <!-- Properties panel toggle -->
+      <button
+        class="collapse-btn props-btn"
+        title="Edit chart properties"
+        @mousedown.stop
+        @click.stop="openPanel(node.id)"
+      >
+        <svg viewBox="0 0 10 10" fill="none">
+          <line x1="1" y1="3" x2="9" y2="3" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="1" y1="5" x2="9" y2="5" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="1" y1="7" x2="9" y2="7" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <circle cx="3.5" cy="3" r="1.2" fill="white"/>
+          <circle cx="6.5" cy="7" r="1.2" fill="white"/>
+        </svg>
+      </button>
+
       <button
         class="collapse-btn chartonly-btn"
         :class="{ active: isChartOnly }"
-        title="Chart only / show config"
+        title="Chart only / show header"
         @mousedown.stop
         @click.stop="toggleChartOnly"
       >
@@ -569,206 +559,7 @@ function downloadCsv() {
       </button>
     </div>
 
-    <!-- Config (hidden when collapsed or chart-only) -->
-    <div v-if="!isCollapsed && !isChartOnly" class="card-config" @mousedown.stop>
-      <!-- Source -->
-      <div class="config-row">
-        <span class="config-label">Source</span>
-        <select class="config-select" :value="node.sourceId ?? '__inline__'" @change="setSource(($event.target as HTMLSelectElement).value)">
-          <option value="__inline__">Inline SQL</option>
-          <option v-for="qn in queryNodes" :key="qn.id" :value="qn.id">
-            Query: {{ qn.name }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Inline SQL (shown only when no sourceId) -->
-      <div v-if="!node.sourceId" class="inline-sql-section">
-        <textarea
-          v-model="localSql"
-          class="inline-sql-editor"
-          spellcheck="false"
-          placeholder="SELECT category, SUM(revenue) FROM sales GROUP BY 1"
-          @keydown="onInlineSqlKeydown"
-        />
-        <div class="inline-sql-footer">
-          <span v-if="inlineError" class="inline-error" :title="inlineError">{{ inlineError.split('\n')[0] }}</span>
-          <span v-else class="inline-hint">⌘↵ to run</span>
-          <button v-if="localSql.trim()" class="ghost-btn" title="Create a QueryCard with this SQL" @click.stop="createQuery">
-            <svg viewBox="0 0 10 10" fill="none">
-              <polyline points="1,3 3,5 1,7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-              <line x1="4" y1="2" x2="9" y2="2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-              <line x1="4" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-              <line x1="4" y1="8" x2="9" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-            </svg>
-            Query
-          </button>
-          <button class="run-btn" @click.stop="runInline">
-            <svg v-if="!isRunningInline" viewBox="0 0 10 10" fill="none">
-              <path d="M2 1.5l7 3.5-7 3.5V1.5z" fill="currentColor"/>
-            </svg>
-            <svg v-else class="spin" viewBox="0 0 12 12" fill="none">
-              <circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="2" stroke-dasharray="8 14" stroke-linecap="round"/>
-            </svg>
-            Run
-          </button>
-        </div>
-      </div>
-
-      <!-- Source-linked: show query status + refresh -->
-      <div v-else-if="node.sourceId" class="source-status">
-        <template v-if="queryResults[node.sourceId]?.isRunning">
-          <span class="source-running">Running query…</span>
-        </template>
-        <template v-else-if="queryResults[node.sourceId]?.error">
-          <span class="source-error">{{ queryResults[node.sourceId].error!.split('\n')[0] }}</span>
-        </template>
-        <template v-else-if="!queryResults[node.sourceId]">
-          <span class="source-hint">Loading…</span>
-        </template>
-        <template v-else>
-          <span class="source-ok">{{ queryResults[node.sourceId].rows.length.toLocaleString() }} rows</span>
-        </template>
-        <button class="run-btn" :disabled="isRunningInline" @click.stop="runLinked">
-          <svg v-if="!isRunningInline" viewBox="0 0 10 10" fill="none">
-            <path d="M1 5A4 4 0 1 1 5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <polyline points="1,2 1,5 4,5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <svg v-else class="spin" viewBox="0 0 12 12" fill="none">
-            <circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="2" stroke-dasharray="8 14" stroke-linecap="round"/>
-          </svg>
-          Refresh
-        </button>
-      </div>
-
-      <!-- Chart type -->
-      <div class="config-row">
-        <span class="config-label">Type</span>
-        <div class="type-pills">
-          <button
-            v-for="t in CHART_TYPES"
-            :key="t.key"
-            class="type-pill"
-            :class="{ active: node.chartType === t.key }"
-            @click.stop="setChartType(t.key)"
-          >{{ t.label }}</button>
-        </div>
-      </div>
-
-      <!-- Plot types: X / Y / Color / Label selectors -->
-      <template v-if="isPlotType">
-        <div class="config-row">
-          <span class="config-label">X</span>
-          <select class="config-select" :value="node.xColumn" @change="setXColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— pick —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-          <span class="config-label">Y</span>
-          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— pick —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-        </div>
-        <div v-if="availableColumns.length" class="config-row">
-          <span class="config-label">Color</span>
-          <select class="config-select" :value="node.colorColumn ?? ''" @change="setColorColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— none —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-          <span class="config-label">Label</span>
-          <select class="config-select" :value="node.labelColumn ?? ''" @change="setLabelColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— none —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-        </div>
-      </template>
-
-      <!-- Number type config -->
-      <template v-if="isStatType">
-        <div class="config-row">
-          <span class="config-label">Value</span>
-          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— pick —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-        </div>
-        <div class="config-row">
-          <span class="config-label">Label</span>
-          <input
-            class="config-input"
-            type="text"
-            :value="node.chartLabel ?? ''"
-            placeholder="optional subtitle"
-            @change="setChartLabel(($event.target as HTMLInputElement).value)"
-          />
-        </div>
-      </template>
-
-      <!-- Boolean type config -->
-      <template v-if="isBoolType">
-        <div class="config-row">
-          <span class="config-label">Value</span>
-          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— pick —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-        </div>
-        <div class="config-row">
-          <span class="config-label">True</span>
-          <input class="config-input" type="text" :value="node.trueText ?? 'True'" placeholder="True" @change="setTrueText(($event.target as HTMLInputElement).value)" />
-          <input class="cond-color" type="color" :value="node.trueColor ?? '#10b981'" @change="setTrueColor(($event.target as HTMLInputElement).value)" />
-        </div>
-        <div class="config-row">
-          <span class="config-label">False</span>
-          <input class="config-input" type="text" :value="node.falseText ?? 'False'" placeholder="False" @change="setFalseText(($event.target as HTMLInputElement).value)" />
-          <input class="cond-color" type="color" :value="node.falseColor ?? '#ef4444'" @change="setFalseColor(($event.target as HTMLInputElement).value)" />
-        </div>
-      </template>
-
-      <!-- Conditional / State type config -->
-      <template v-if="isCondType">
-        <div class="config-row">
-          <span class="config-label">Value</span>
-          <select class="config-select" :value="node.yColumn" @change="setYColumn(($event.target as HTMLSelectElement).value)">
-            <option value="">— pick —</option>
-            <option v-for="col in availableColumns" :key="col" :value="col">{{ col }}</option>
-          </select>
-        </div>
-        <div class="cond-header">
-          <span class="config-label" style="width:auto">States</span>
-          <span class="cond-col-hint">match</span>
-          <span class="cond-col-hint">label</span>
-        </div>
-        <div class="cond-list">
-          <div v-for="(cond, i) in localConditions" :key="i" class="cond-row">
-            <input
-              class="config-input cond-match"
-              type="text"
-              :value="cond.match"
-              placeholder="value or *"
-              @input="localConditions[i].match = ($event.target as HTMLInputElement).value; saveConditions()"
-            />
-            <input
-              class="config-input cond-label"
-              type="text"
-              :value="cond.label"
-              placeholder="label"
-              @input="localConditions[i].label = ($event.target as HTMLInputElement).value; saveConditions()"
-            />
-            <input
-              class="cond-color"
-              type="color"
-              :value="cond.color"
-              @change="localConditions[i].color = ($event.target as HTMLInputElement).value; saveConditions()"
-            />
-            <button class="cond-remove" title="Remove" @mousedown.stop @click.stop="removeCondition(i)">×</button>
-          </div>
-        </div>
-        <button class="add-cond-btn" @mousedown.stop @click.stop="addCondition">+ Add state</button>
-      </template>
-    </div>
-
-    <!-- Observable Plot area (standard chart types) -->
+    <!-- Observable Plot area -->
     <div v-if="!isCollapsed && isPlotType" class="chart-area" :style="{ height: `${(node.h ?? 180) + 24}px` }">
       <div ref="chartContainer" class="chart-plot" />
       <div v-if="!effectiveData || !node.xColumn || !node.yColumn" class="chart-placeholder">
@@ -776,7 +567,8 @@ function downloadCsv() {
           <rect x="2" y="2" width="28" height="28" rx="3" stroke="currentColor" stroke-width="1.5"/>
           <polyline points="6,22 11,14 16,18 22,10 26,13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick X and Y columns above' }}</span>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Set columns in the properties panel' }}</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
       </div>
     </div>
 
@@ -790,7 +582,8 @@ function downloadCsv() {
         <svg viewBox="0 0 32 32" fill="none">
           <path d="M16 6v20M6 16h20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
-        <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick a Value column above' }}</span>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Set a Value column in the properties panel' }}</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
       </div>
     </div>
 
@@ -807,27 +600,75 @@ function downloadCsv() {
           <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.5"/>
           <path d="M12 16l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span>{{ !effectiveData ? 'Run a query to load data' : 'Pick a Value column above' }}</span>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Set a Value column in the properties panel' }}</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
+      </div>
+    </div>
+
+    <!-- Mermaid diagram display -->
+    <div v-if="!isCollapsed && isMermaidType" class="chart-area mermaid-area" :style="{ height: `${(node.h ?? 240) + 24}px` }">
+      <div ref="mermaidContainer" class="mermaid-plot" />
+    </div>
+
+    <!-- Table display -->
+    <div v-if="!isCollapsed && isTableType" class="table-area" :style="{ height: `${(node.h ?? 280) + 24}px` }">
+      <template v-if="effectiveData && effectiveData.rows.length">
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th
+                  v-for="col in visibleColumns"
+                  :key="col"
+                  :style="({ textAlign: cellAlign(node.tableColumnConfigs?.[col]) } as any)"
+                >
+                  {{ node.tableColumnConfigs?.[col]?.label || col }}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, ri) in effectiveData.rows" :key="ri">
+                <td
+                  v-for="col in visibleColumns"
+                  :key="col"
+                  :style="({ textAlign: cellAlign(node.tableColumnConfigs?.[col]) } as any)"
+                  :class="{ 'cell-null': row[col] === null || row[col] === undefined }"
+                >
+                  {{ formatCell(row[col], node.tableColumnConfigs?.[col]) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+      <div v-else class="chart-placeholder">
+        <svg viewBox="0 0 32 32" fill="none">
+          <rect x="2" y="4" width="28" height="24" rx="2" stroke="currentColor" stroke-width="1.5"/>
+          <line x1="2" y1="11" x2="30" y2="11" stroke="currentColor" stroke-width="1.5"/>
+          <line x1="11" y1="4" x2="11" y2="28" stroke="currentColor" stroke-width="1"/>
+        </svg>
+        <span>Run a query to load data</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
       </div>
     </div>
 
     <!-- CSV export footer -->
     <div
-      v-if="!isCollapsed && effectiveData && effectiveData.rows.length"
+      v-if="!isCollapsed && !isMermaidType && effectiveData && effectiveData.rows.length"
       class="chart-footer"
       @mousedown.stop
     >
       <span class="chart-footer-count">{{ effectiveData.rows.length.toLocaleString() }} rows</span>
-      <button class="export-csv-btn" title="Download as CSV" @click.stop="downloadCsv">
-        <svg viewBox="0 0 10 10" fill="none">
-          <path d="M5 1v6M2.5 5l2.5 2.5L7.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M1 8.5h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-        </svg>
-        CSV
-      </button>
+      <button
+        v-for="fmt in (['csv','tsv','json','md'] as const)"
+        :key="fmt"
+        class="export-csv-btn"
+        :title="`Download as ${fmt.toUpperCase()}`"
+        @click.stop="onExport(fmt)"
+      >{{ fmt.toUpperCase() }}</button>
     </div>
 
-    <!-- Resize handles (hidden when collapsed) -->
+    <!-- Resize handles -->
     <template v-if="!isCollapsed">
       <div class="rh-e"  @mousedown.stop="startResize($event, 'e')" />
       <div class="rh-s"  @mousedown.stop="startResize($event, 's')" />
@@ -844,7 +685,7 @@ function downloadCsv() {
 <style scoped>
 .chart-card {
   position: absolute;
-  width: 340px; /* overridden by inline style when w is set */
+  width: 340px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-1);
@@ -853,15 +694,12 @@ function downloadCsv() {
   cursor: grab;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
-
 .chart-card:active { cursor: grabbing; }
-
 .chart-card.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2), 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-/* ── Header ──────────────────────────────────────────────────────────────── */
 .card-header {
   display: flex;
   align-items: center;
@@ -873,9 +711,7 @@ function downloadCsv() {
   color: white;
   letter-spacing: 0.02em;
 }
-
 .card-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.9; }
-
 .card-name {
   flex: 1;
   overflow: hidden;
@@ -883,12 +719,11 @@ function downloadCsv() {
   white-space: nowrap;
   cursor: text;
 }
-
 .card-name-input {
   flex: 1;
   min-width: 0;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.4);
   border-radius: 3px;
   color: white;
   font-size: 12px;
@@ -898,11 +733,7 @@ function downloadCsv() {
   padding: 1px 4px;
   outline: none;
 }
-
-.card-name-input:focus {
-  border-color: rgba(255, 255, 255, 0.75);
-  background: rgba(0, 0, 0, 0.35);
-}
+.card-name-input:focus { border-color: rgba(255,255,255,0.75); background: rgba(0,0,0,0.35); }
 
 .collapse-btn {
   display: flex;
@@ -920,8 +751,13 @@ function downloadCsv() {
   transition: opacity 0.15s, background 0.15s;
 }
 .collapse-btn svg { width: 10px; height: 10px; }
-.collapse-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.15); }
-.chartonly-btn.active { opacity: 1; background: rgba(255, 255, 255, 0.2); }
+.collapse-btn:hover { opacity: 1; background: rgba(255,255,255,0.15); }
+.chartonly-btn.active { opacity: 1; background: rgba(255,255,255,0.2); }
+
+.props-btn { opacity: 0; }
+.chart-card:hover .props-btn { opacity: 0.55; }
+.chart-card.selected .props-btn { opacity: 0.7; }
+.props-btn:hover { opacity: 1 !important; background: rgba(255,255,255,0.2) !important; }
 
 .delete-btn {
   display: flex;
@@ -938,176 +774,12 @@ function downloadCsv() {
   flex-shrink: 0;
   transition: opacity 0.15s, background 0.15s, width 0.15s;
 }
-
 .delete-btn svg { width: 11px; height: 11px; }
-
-.chart-card:hover .delete-btn,
-.delete-btn.confirming { opacity: 1; }
-
+.chart-card:hover .delete-btn, .delete-btn.confirming { opacity: 1; }
 .delete-btn:hover { background: rgba(248, 81, 73, 0.35); }
-
-.delete-btn.confirming {
-  background: rgba(248, 81, 73, 0.5);
-  width: auto;
-  padding: 0 6px;
-}
-
+.delete-btn.confirming { background: rgba(248, 81, 73, 0.5); width: auto; padding: 0 6px; }
 .confirm-label { font-size: 10px; font-weight: 700; white-space: nowrap; letter-spacing: 0.02em; }
 
-/* ── Config panel ────────────────────────────────────────────────────────── */
-.card-config {
-  padding: 8px 10px 6px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  cursor: default;
-}
-
-.config-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.config-label {
-  font-size: 10.5px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  width: 36px;
-  text-align: right;
-}
-
-.config-select {
-  flex: 1;
-  min-width: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 11px;
-  padding: 3px 6px;
-  outline: none;
-  font-family: var(--font-mono);
-  cursor: pointer;
-}
-
-.config-select:focus { border-color: var(--accent); }
-
-.type-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  flex: 1;
-}
-
-.type-pill {
-  flex: 1 1 calc(33.333% - 4px);
-  padding: 2px 4px;
-  font-size: 10.5px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.type-pill:hover { color: var(--text-primary); }
-
-.type-pill.active {
-  background: rgba(88, 166, 255, 0.12);
-  border-color: rgba(88, 166, 255, 0.4);
-  color: var(--accent);
-}
-
-/* ── Inline SQL ──────────────────────────────────────────────────────────── */
-.inline-sql-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.inline-sql-editor {
-  width: 100%;
-  min-height: 54px;
-  resize: none;
-  background: var(--surface-0);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  outline: none;
-  padding: 6px 8px;
-  font-size: 11px;
-  line-height: 1.5;
-  font-family: var(--font-mono);
-  tab-size: 2;
-  box-sizing: border-box;
-  cursor: text;
-}
-
-.inline-sql-editor:focus { border-color: var(--accent); }
-.inline-sql-editor::placeholder { color: var(--text-muted); }
-
-.inline-sql-footer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.inline-hint, .inline-error, .source-hint, .source-running, .source-error, .source-ok {
-  flex: 1;
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-}
-
-.inline-hint, .source-hint { color: var(--text-muted); font-style: italic; }
-.inline-error, .source-error { color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.source-running { color: var(--accent); }
-.source-ok { color: var(--success); }
-
-.source-status { padding: 0 0 2px; }
-
-.run-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  font-size: 10.5px;
-  font-weight: 600;
-  background: var(--accent);
-  color: #0d1117;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.15s;
-}
-
-.run-btn svg { width: 9px; height: 9px; }
-.run-btn:hover:not(:disabled) { background: var(--accent-hover); }
-.run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.ghost-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 7px;
-  font-size: 10.5px;
-  font-weight: 500;
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
-}
-
-.ghost-btn svg { width: 9px; height: 9px; }
-.ghost-btn:hover { background: var(--surface-3, var(--surface-2)); color: var(--text-primary); }
-
-/* ── Chart area ──────────────────────────────────────────────────────────── */
 .chart-area {
   position: relative;
   min-height: 100px;
@@ -1117,14 +789,61 @@ function downloadCsv() {
   justify-content: center;
   overflow: hidden;
 }
+.chart-plot { width: 100%; }
+.chart-plot :deep(svg) { max-width: 100%; }
 
-.chart-plot {
+.mermaid-area { align-items: flex-start; justify-content: flex-start; padding: 10px; }
+.mermaid-plot { width: 100%; overflow: auto; }
+.mermaid-plot :deep(svg) { max-width: 100%; height: auto; }
+
+.table-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.table-scroll {
+  flex: 1;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.table-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+.table-scroll::-webkit-scrollbar-track { background: transparent; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.data-table {
   width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
-
-.chart-plot :deep(svg) {
-  max-width: 100%;
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  z-index: 1;
 }
+.data-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.data-table tbody tr:last-child { border-bottom: none; }
+.data-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.data-table tbody td {
+  padding: 4px 10px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cell-null { color: var(--text-muted) !important; font-style: italic; }
 
 .chart-placeholder {
   display: flex;
@@ -1136,109 +855,31 @@ function downloadCsv() {
   padding: 20px;
   text-align: center;
 }
-
-.chart-placeholder svg {
-  width: 32px;
-  height: 32px;
-  opacity: 0.3;
-}
-
-.chart-err {
-  font-size: 11px;
-  color: var(--error);
-  padding: 8px;
+.chart-placeholder svg { width: 32px; height: 32px; opacity: 0.3; }
+.chart-placeholder-msg {
+  font-size: 11.5px;
+  color: var(--text-muted);
   text-align: center;
+  padding: 24px 16px;
+  font-style: italic;
 }
 
-/* ── Config input (text fields) ──────────────────────────────────────────── */
-.config-input {
-  flex: 1;
-  min-width: 0;
+.open-props-btn {
+  margin-top: 4px;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-family: inherit;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 11px;
-  padding: 3px 6px;
-  outline: none;
-  font-family: var(--font-mono);
-}
-.config-input:focus { border-color: var(--accent); }
-.config-input::placeholder { color: var(--text-muted); }
-
-.cond-color {
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px;
+  border-radius: 5px;
+  color: var(--text-secondary);
   cursor: pointer;
-  background: none;
-  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
 }
+.open-props-btn:hover { color: var(--text-primary); background: var(--surface-3, var(--surface-2)); }
 
-/* ── Conditions list ─────────────────────────────────────────────────────── */
-.cond-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 0 2px;
-}
-.cond-col-hint {
-  flex: 1;
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-muted);
-  text-align: center;
-}
-.cond-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.cond-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.cond-match { flex: 0 0 36%; }
-.cond-label { flex: 1; }
+.chart-err { font-size: 11px; color: var(--error); padding: 8px; text-align: center; }
 
-.cond-remove {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 3px;
-  font-size: 14px;
-  line-height: 1;
-  flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
-}
-.cond-remove:hover { background: rgba(248, 81, 73, 0.2); color: var(--error); }
-
-.add-cond-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  color: var(--accent);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 2px 0;
-  font-family: inherit;
-  transition: opacity 0.15s;
-}
-.add-cond-btn:hover { opacity: 0.75; }
-
-/* ── Stat (number) display ───────────────────────────────────────────────── */
 .stat-area {
   display: flex;
   flex-direction: column;
@@ -1248,7 +889,6 @@ function downloadCsv() {
   gap: 6px;
   overflow: hidden;
 }
-
 .stat-value {
   font-size: 48px;
   font-weight: 700;
@@ -1262,24 +902,9 @@ function downloadCsv() {
   white-space: nowrap;
   max-width: 100%;
 }
+.stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.09em; text-align: center; }
 
-.stat-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  text-align: center;
-}
-
-/* ── Badge (boolean / conditional) display ───────────────────────────────── */
-.badge-area {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  overflow: hidden;
-}
-
+.badge-area { display: flex; align-items: center; justify-content: center; padding: 16px; overflow: hidden; }
 .badge-display {
   display: flex;
   align-items: center;
@@ -1290,96 +915,33 @@ function downloadCsv() {
   justify-content: center;
   transition: background 0.3s;
 }
-
 .badge-dot {
-  width: 10px;
-  height: 10px;
+  width: 10px; height: 10px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.7);
+  background: rgba(255,255,255,0.7);
   flex-shrink: 0;
   animation: badge-pulse 2.5s ease-in-out infinite;
 }
+.badge-text { font-size: 18px; font-weight: 700; color: white; letter-spacing: 0.03em; text-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+@keyframes badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-.badge-text {
-  font-size: 18px;
-  font-weight: 700;
-  color: white;
-  letter-spacing: 0.03em;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-@keyframes badge-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.spin { animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── Resize handles ──────────────────────────────────────────────────────── */
 .rh-e, .rh-s, .rh-se { position: absolute; opacity: 0; transition: opacity 0.15s; }
-
-.rh-e {
-  right: 0; top: 8px; bottom: 20px; width: 6px;
-  cursor: ew-resize;
-  border-radius: 0 4px 4px 0;
-}
-.rh-s {
-  bottom: 0; left: 8px; right: 20px; height: 6px;
-  cursor: ns-resize;
-  border-radius: 0 0 4px 4px;
-}
-.rh-se {
-  right: 0; bottom: 0; width: 18px; height: 18px;
-  cursor: se-resize;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--text-muted);
-  border-radius: 0 0 7px 0;
-}
+.rh-e { right: 0; top: 8px; bottom: 20px; width: 6px; cursor: ew-resize; border-radius: 0 4px 4px 0; }
+.rh-s { bottom: 0; left: 8px; right: 20px; height: 6px; cursor: ns-resize; border-radius: 0 0 4px 4px; }
+.rh-se { right: 0; bottom: 0; width: 18px; height: 18px; cursor: se-resize; display: flex; align-items: center; justify-content: center; color: var(--text-muted); border-radius: 0 0 7px 0; }
 .rh-se svg { width: 8px; height: 8px; }
-
 .rh-e:hover, .rh-s:hover { background: rgba(88, 166, 255, 0.2); }
+.chart-card:hover .rh-e, .chart-card:hover .rh-s, .chart-card:hover .rh-se,
+.chart-card.selected .rh-e, .chart-card.selected .rh-s, .chart-card.selected .rh-se { opacity: 1; }
 
-.chart-card:hover .rh-e,
-.chart-card:hover .rh-s,
-.chart-card:hover .rh-se,
-.chart-card.selected .rh-e,
-.chart-card.selected .rh-s,
-.chart-card.selected .rh-se { opacity: 1; }
-
-/* ── Chart footer ────────────────────────────────────────────────────────── */
-.chart-footer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 5px 10px;
-  border-top: 1px solid var(--border);
-}
-
-.chart-footer-count {
-  flex: 1;
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-
+.chart-footer { display: flex; align-items: center; gap: 6px; padding: 4px 8px 5px 10px; border-top: 1px solid var(--border); }
+.chart-footer-count { flex: 1; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted); }
 .export-csv-btn {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.1s, color 0.1s;
+  display: flex; align-items: center; gap: 3px;
+  padding: 2px 6px; font-size: 10px; font-weight: 600; font-family: var(--font-mono);
+  background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 3px; cursor: pointer; flex-shrink: 0; transition: background 0.1s, color 0.1s;
 }
-
 .export-csv-btn svg { width: 9px; height: 9px; }
 .export-csv-btn:hover { background: var(--accent); color: #0d1117; border-color: var(--accent); }
 </style>

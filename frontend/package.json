@@ -16,6 +16,7 @@
     "@duckdb/duckdb-wasm": "^1.29.0",
     "@observablehq/plot": "^0.6.17",
     "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.34"
   },

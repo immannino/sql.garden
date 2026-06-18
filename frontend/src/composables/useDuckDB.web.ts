@@ -1,8 +1,8 @@
 import * as duckdb from '@duckdb/duckdb-wasm'
 import duckdb_mvp_wasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url'
 import duckdb_eh_wasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url'
-import MvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?worker'
-import EhWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?worker'
+import duckdb_mvp_worker_url from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url'
+import duckdb_eh_worker_url from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url'
 import type { Column } from '../stores/schema'
 import type { QueryResult } from './useDuckDB'
 
@@ -14,11 +14,14 @@ async function ensureDB(): Promise<duckdb.AsyncDuckDB> {
   if (_initPromise) { await _initPromise; return _db! }
 
   _initPromise = (async () => {
-    // crossOriginIsolated is true when COOP/COEP headers are present (GitHub Pages
-    // doesn't support them, so we fall back to the single-threaded MVP bundle).
+    // crossOriginIsolated requires COOP/COEP headers (not available on GitHub Pages).
+    // MVP is single-threaded but works everywhere; EH is faster but needs isolation.
     const useEH = !!crossOriginIsolated
-    const worker = useEH ? new EhWorker() : new MvpWorker()
-    const wasmUrl = useEH ? duckdb_eh_wasm : duckdb_mvp_wasm
+    const workerUrl = useEH ? duckdb_eh_worker_url : duckdb_mvp_worker_url
+    const wasmUrl   = useEH ? duckdb_eh_wasm       : duckdb_mvp_wasm
+    // Use a plain classic Worker (not Vite's ?worker transform) so the pre-bundled
+    // DuckDB worker script runs as-is without Vite wrapping it in an ES module.
+    const worker = new Worker(workerUrl)
     const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker)
     await db.instantiate(wasmUrl)
     _db = db

@@ -41,9 +41,26 @@ export interface QueryNode {
 }
 
 export interface ConditionRule {
-  match: string   // exact string match; '*' = wildcard/default
+  // Operators: >, >=, <, <=, !=, = N   (numeric when both sides are numbers)
+  //            contains X, starts X, ends X   (case-insensitive string ops)
+  //            bare value → exact match   |   * → catch-all
+  match: string
   label: string
   color: string
+}
+
+export type ColumnFormatType = 'auto' | 'number' | 'currency' | 'percent' | 'date' | 'text'
+export type ColumnAlign = 'left' | 'center' | 'right'
+export type DatePattern = 'date' | 'datetime' | 'iso' | 'us' | 'eu' | 'relative'
+
+export interface TableColumnConfig {
+  hidden?: boolean
+  label?: string          // display name override
+  formatType?: ColumnFormatType
+  decimals?: number       // number / currency / percent
+  currencySymbol?: string // currency (default '$')
+  datePattern?: DatePattern
+  align?: ColumnAlign
 }
 
 export interface ChartNode {
@@ -54,7 +71,7 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'number' | 'boolean' | 'conditional'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
   xColumn: string
   yColumn: string
   colorColumn?: string
@@ -68,6 +85,10 @@ export interface ChartNode {
   falseColor?: string
   // conditional type
   conditions?: ConditionRule[]
+  // mermaid type
+  mermaidCode?: string
+  // table type
+  tableColumnConfigs?: Record<string, TableColumnConfig>
   color: string
   w?: number
   h?: number
@@ -176,7 +197,7 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'query') n.isView = isView
   }
 
-  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions'>>) {
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions' | 'mermaidCode' | 'tableColumnConfigs'>>) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'chart') Object.assign(n, updates)
   }

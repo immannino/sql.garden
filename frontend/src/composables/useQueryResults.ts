@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { reactive, markRaw } from 'vue'
 
 export interface NodeQueryResult {
   columns: string[]
@@ -14,7 +14,11 @@ const _results = reactive<Record<string, NodeQueryResult>>({})
 export function useQueryResults() {
   return {
     results: _results,
-    setResult(id: string, r: NodeQueryResult) { _results[id] = r },
+    setResult(id: string, r: NodeQueryResult) {
+      // markRaw prevents Vue from deep-proxying every row object — rows are
+      // read-only display data and don't need per-property change tracking.
+      _results[id] = { ...r, rows: markRaw(r.rows) }
+    },
     clearResult(id: string) { delete _results[id] },
   }
 }

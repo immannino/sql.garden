@@ -53,11 +53,16 @@ jobs:
       - name: Build macOS universal binary
         run: wails build -platform darwin/universal -o sql.garden
 
+      - name: Package macOS app
+        run: |
+          cd build/bin
+          zip -r sql.garden-macos-universal.zip sql.garden.app
+
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: sql.garden-macos
-          path: build/bin/sql.garden.app
+          path: build/bin/sql.garden-macos-universal.zip
           if-no-files-found: error
 
   build-windows:
@@ -120,11 +125,6 @@ jobs:
           name: sql.garden-windows
           path: dist/windows
 
-      - name: Package macOS app
-        run: |
-          cd dist/macos
-          zip -r ../../sql.garden-macos-universal.zip sql.garden.app
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -132,5 +132,5 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
-            sql.garden-macos-universal.zip
+            dist/macos/sql.garden-macos-universal.zip
             dist/windows/sql.garden.exe

@@ -34,6 +34,8 @@ export function GetAppVersion():Promise<string>;
 
 export function GetDatabaseSchemas(arg1:string):Promise<Array<main.SchemaInfo>>;
 
+export function GetMCPConfigStatus():Promise<main.MCPConfigStatus>;
+
 export function GetMCPPort():Promise<number>;
 
 export function GetSchemaTables(arg1:string,arg2:string):Promise<Array<main.TableInfo>>;
@@ -80,6 +82,10 @@ export function SaveCanvasState(arg1:string):Promise<void>;
 
 export function SaveConnection(arg1:main.ConnectionRecord):Promise<main.ConnectionRecord>;
 
+export function SaveFileWithDialog(arg1:string,arg2:string):Promise<string>;
+
 export function SaveTableData(arg1:string):Promise<void>;
 
 export function SendAIMessage(arg1:Array<main.AIChatMessage>):Promise<main.AIResponse>;
+
+export function WriteMCPToClaudeDesktop():Promise<void>;

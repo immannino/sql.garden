@@ -257,7 +257,7 @@ function useDesktopPersistence() {
 
   function startAutoSave(): void {
     watch(
-      schemaStore.nodes,
+      () => schemaStore.nodes,
       () => {
         if (_saveTimer) clearTimeout(_saveTimer)
         _saveTimer = setTimeout(() => { saveCanvas() }, 1000)

@@ -4,20 +4,22 @@ import { useTheme, type Theme } from '../composables/useTheme'
 import { IS_DESKTOP } from '../lib/env'
 import type { main } from '../../wailsjs/go/models'
 
+const props = defineProps<{ initialTab?: 'appearance' | 'mcp' | 'updates' }>()
 const emit = defineEmits<{ close: [] }>()
 
 const { theme, setTheme } = useTheme()
 
 type Tab = 'appearance' | 'mcp' | 'updates'
-const activeTab = ref<Tab>('appearance')
+const activeTab = ref<Tab>(props.initialTab ?? 'appearance')
 
 // ── MCP ───────────────────────────────────────────────────────────────────────
 const mcpPort = 37421
-const mcpCopied = ref(false)
+const copiedKey = ref<string | null>(null)
+const mcpConfigStatus = ref<main.MCPConfigStatus | null>(null)
+const mcpWriting = ref(false)
+const mcpWriteResult = ref<'ok' | 'err' | null>(null)
 
-const mcpClaudeCodeSnippet = `mcp add --transport http sql-garden http://127.0.0.1:${mcpPort}/mcp`
-
-const mcpDesktopSnippet = `{
+const jsonSnippet = `{
   "mcpServers": {
     "sql-garden": {
       "url": "http://127.0.0.1:${mcpPort}/mcp"
@@ -25,10 +27,62 @@ const mcpDesktopSnippet = `{
   }
 }`
 
-function copyMcpConfig(text: string) {
+const CLIENTS = [
+  {
+    id: 'claude-code',
+    label: 'Claude Code',
+    hint: 'Run in your terminal:',
+    snippet: `mcp add --transport http sql-garden http://127.0.0.1:${mcpPort}/mcp`,
+    mono: true,
+  },
+  {
+    id: 'claude-desktop',
+    label: 'Claude Desktop',
+    hint: 'Add to claude_desktop_config.json → mcpServers:',
+    snippet: jsonSnippet,
+    mono: false,
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    hint: 'Add to ~/.cursor/mcp.json → mcpServers:',
+    snippet: jsonSnippet,
+    mono: false,
+  },
+  {
+    id: 'windsurf',
+    label: 'Windsurf',
+    hint: 'Add to ~/.codeium/windsurf/mcp_config.json → mcpServers:',
+    snippet: jsonSnippet,
+    mono: false,
+  },
+]
+
+function copySnippet(id: string, text: string) {
   navigator.clipboard.writeText(text)
-  mcpCopied.value = true
-  setTimeout(() => { mcpCopied.value = false }, 2000)
+  copiedKey.value = id
+  setTimeout(() => { if (copiedKey.value === id) copiedKey.value = null }, 2000)
+}
+
+async function loadMCPStatus() {
+  if (!IS_DESKTOP) return
+  const { GetMCPConfigStatus } = await import('../../wailsjs/go/main/App')
+  mcpConfigStatus.value = await GetMCPConfigStatus()
+}
+
+async function autoConfigureClaude() {
+  if (mcpWriting.value) return
+  mcpWriting.value = true; mcpWriteResult.value = null
+  try {
+    const { WriteMCPToClaudeDesktop } = await import('../../wailsjs/go/main/App')
+    await WriteMCPToClaudeDesktop()
+    mcpWriteResult.value = 'ok'
+    await loadMCPStatus()
+  } catch {
+    mcpWriteResult.value = 'err'
+  } finally {
+    mcpWriting.value = false
+  }
 }
 
 // ── Updates ───────────────────────────────────────────────────────────────────
@@ -52,11 +106,13 @@ async function checkForUpdates() {
 
 watch(activeTab, (tab) => {
   if (tab === 'updates' && !updateInfo.value && !checkingUpdate.value) checkForUpdates()
+  if (tab === 'mcp' && !mcpConfigStatus.value) loadMCPStatus()
 })
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 onMounted(() => {
   window.addEventListener('keydown', onKey)
+  if (activeTab.value === 'mcp') loadMCPStatus()
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 
@@ -153,32 +209,39 @@ function onBackdrop(e: MouseEvent) {
           <!-- MCP (desktop only) -->
           <template v-if="IS_DESKTOP && activeTab === 'mcp'">
             <h3 class="pane-title">MCP Server</h3>
-            <p class="pane-desc">sql.garden runs a local MCP server so Claude can query your data, add nodes, and build dashboards autonomously.</p>
+            <p class="pane-desc">sql.garden runs a local MCP server so AI assistants can query your data, add nodes, and build dashboards autonomously.</p>
 
             <div class="field-group">
               <label class="field-label">Status</label>
               <span class="status-badge running">● Running on port {{ mcpPort }}</span>
             </div>
 
-            <div class="field-group">
-              <label class="field-label">Claude Code</label>
-              <div class="code-block">
-                <code>{{ mcpClaudeCodeSnippet }}</code>
-                <button class="copy-btn" @click="copyMcpConfig(mcpClaudeCodeSnippet)">
-                  {{ mcpCopied ? '✓' : 'Copy' }}
+            <!-- Per-client setup -->
+            <div v-for="client in CLIENTS" :key="client.id" class="field-group">
+              <label class="field-label">{{ client.label }}</label>
+              <span class="field-hint" style="margin-top: -2px;">{{ client.hint }}</span>
+              <div :class="['code-block', { 'code-block--multi': !client.mono }]">
+                <code v-if="client.mono">{{ client.snippet }}</code>
+                <pre v-else>{{ client.snippet }}</pre>
+                <button class="copy-btn" @click="copySnippet(client.id, client.snippet)">
+                  {{ copiedKey === client.id ? '✓' : 'Copy' }}
                 </button>
               </div>
-            </div>
 
-            <div class="field-group">
-              <label class="field-label">Claude Desktop</label>
-              <div class="code-block code-block--multi">
-                <pre>{{ mcpDesktopSnippet }}</pre>
-                <button class="copy-btn" @click="copyMcpConfig(mcpDesktopSnippet)">
-                  {{ mcpCopied ? '✓' : 'Copy' }}
+              <!-- Auto-configure button for Claude Desktop -->
+              <div v-if="client.id === 'claude-desktop'" class="auto-configure-row">
+                <button
+                  class="auto-btn"
+                  :disabled="mcpWriting || mcpConfigStatus?.configured"
+                  @click="autoConfigureClaude"
+                >
+                  <span v-if="mcpWriting" class="spinner" />
+                  {{ mcpConfigStatus?.configured ? 'Already configured ✓' : 'Auto-configure Claude Desktop' }}
                 </button>
+                <span v-if="mcpConfigStatus?.path" class="config-path">{{ mcpConfigStatus.path }}</span>
+                <span v-if="mcpWriteResult === 'ok'" class="write-result ok">Config updated successfully</span>
+                <span v-if="mcpWriteResult === 'err'" class="write-result err">Failed to write config</span>
               </div>
-              <span class="field-hint">Add to <code>claude_desktop_config.json</code> under mcpServers</span>
             </div>
           </template>
 
@@ -581,4 +644,43 @@ function onBackdrop(e: MouseEvent) {
 }
 .update-cta:hover { opacity: 0.88; }
 .update-cta svg { width: 11px; height: 11px; }
+
+/* Auto-configure Claude Desktop */
+.auto-configure-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auto-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.08);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 6px;
+  width: fit-content;
+  transition: background 0.15s, opacity 0.15s;
+}
+.auto-btn:hover:not(:disabled) { background: rgba(88, 166, 255, 0.15); }
+.auto-btn:disabled { opacity: 0.6; }
+[data-theme="light"] .auto-btn { background: rgba(9, 105, 218, 0.06); border-color: rgba(9, 105, 218, 0.25); }
+
+.config-path {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.write-result {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.write-result.ok { color: var(--success); }
+.write-result.err { color: var(--danger, #f85149); }
 </style>

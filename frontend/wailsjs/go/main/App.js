@@ -66,6 +66,10 @@ export function GetDatabaseSchemas(arg1) {
   return window['go']['main']['App']['GetDatabaseSchemas'](arg1);
 }
 
+export function GetMCPConfigStatus() {
+  return window['go']['main']['App']['GetMCPConfigStatus']();
+}
+
 export function GetMCPPort() {
   return window['go']['main']['App']['GetMCPPort']();
 }
@@ -158,10 +162,18 @@ export function SaveConnection(arg1) {
   return window['go']['main']['App']['SaveConnection'](arg1);
 }
 
+export function SaveFileWithDialog(arg1, arg2) {
+  return window['go']['main']['App']['SaveFileWithDialog'](arg1, arg2);
+}
+
 export function SaveTableData(arg1) {
   return window['go']['main']['App']['SaveTableData'](arg1);
 }
 
 export function SendAIMessage(arg1) {
   return window['go']['main']['App']['SendAIMessage'](arg1);
+}
+
+export function WriteMCPToClaudeDesktop() {
+  return window['go']['main']['App']['WriteMCPToClaudeDesktop']();
 }

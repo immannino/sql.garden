@@ -246,6 +246,22 @@ export namespace main {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+	export class MCPConfigStatus {
+	    found: boolean;
+	    path: string;
+	    configured: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MCPConfigStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.found = source["found"];
+	        this.path = source["path"];
+	        this.configured = source["configured"];
+	    }
+	}
 	export class QueryResult {
 	    columns: string[];
 	    rows: any[];

@@ -6,21 +6,57 @@ import ImportModal from './components/ImportModal.vue'
 import Sidebar from './components/Sidebar.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import DatasetPickerModal from './components/DatasetPickerModal.vue'
+import ChartPropertiesPanel from './components/ChartPropertiesPanel.vue'
+import HelpPanel from './components/HelpPanel.vue'
 import { useDuckDB } from './composables/useDuckDB'
 import { useSchemaStore } from './stores/schema'
 import { usePersistence } from './composables/usePersistence'
 import { useAppReady } from './composables/useAppReady'
 import { useTheme } from './composables/useTheme'
+import { useChartPanel } from './composables/useChartPanel'
+import { useQueryResults } from './composables/useQueryResults'
+import { useChartResults } from './composables/useChartResults'
+import { exportData, type ExportFormat } from './lib/exportData'
 import { IS_DESKTOP } from './lib/env'
 import type { main } from '../wailsjs/go/models'
 
-const { init, isReady, isLoading, initError, exec } = useDuckDB()
+const { init, isReady, isLoading, initError, exec, query } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { loadAll, startAutoSave } = usePersistence()
 const { markAppReady } = useAppReady()
 const { loadTheme } = useTheme()
+const { openPanel } = useChartPanel()
+const { results: queryResults } = useQueryResults()
+const { chartResults } = useChartResults()
 const showSettings = ref(false)
+const settingsInitialTab = ref<'appearance' | 'mcp' | 'updates' | undefined>(undefined)
 const showDatasetPicker = ref(false)
+const showHelp = ref(false)
+const updateBanner = ref(false)
+const loadError = ref<string | null>(null)
+
+const WEB_QUICKSTART = `# Welcome to sql.garden 🌱
+
+An infinite canvas SQL workspace powered by **DuckDB WebAssembly** — everything runs locally in your browser.
+
+---
+
+## Get started
+
+| Action | How |
+|---|---|
+| Load sample data | **Samples** in the toolbar |
+| Import CSV / Parquet / JSON | **Import** or press \`I\` |
+| Add a SQL query node | Press \`Q\` |
+| Add a chart | Press \`C\` |
+| Add a note | Press \`N\` |
+| Fit canvas to view | Press \`F\` |
+
+Press **\`?\`** anytime to see all keyboard shortcuts.
+
+---
+
+> Data is **in-memory only** in the browser — re-import or reload a sample each session. Canvas layout is saved automatically.`
 
 function addQueryNode() {
   const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
@@ -30,15 +66,16 @@ function addQueryNode() {
     name: `query_${n}`,
     x: center.x - 140,
     y: center.y - 80,
-    sql: 'SELECT\n  *\nFROM users\nLIMIT 100',
+    sql: 'SHOW TABLES',
   })
 }
 
 function addChartNode() {
   const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
   const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
+  const id = `chart_${Date.now()}`
   schemaStore.addChartNode({
-    id: `chart_${Date.now()}`,
+    id,
     name: `chart_${n}`,
     x: center.x - 170,
     y: center.y - 120,
@@ -48,6 +85,7 @@ function addChartNode() {
     xColumn: '',
     yColumn: '',
   })
+  openPanel(id)
 }
 
 function addMarkdownNode() {
@@ -74,7 +112,7 @@ function addSection() {
   })
 }
 
-function exportCanvasMarkdown() {
+async function exportCanvasMarkdown() {
   const parts: string[] = []
   for (const node of schemaStore.nodes) {
     if (node.kind === 'markdown') {
@@ -85,16 +123,18 @@ function exportCanvasMarkdown() {
       const header = '| Column | Type |\n| --- | --- |'
       parts.push(`## ${node.name}\n\n${header}`)
     }
-    // sections and charts: skip
   }
   const md = `# Canvas Export\n\n${parts.join('\n\n')}`
-  const blob = new Blob([md], { type: 'text/markdown' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'canvas-export.md'
-  a.click()
-  URL.revokeObjectURL(url)
+  if (IS_DESKTOP) {
+    const { SaveFileWithDialog } = await import('../wailsjs/go/main/App')
+    await SaveFileWithDialog('canvas-export.md', md)
+  } else {
+    const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = 'canvas-export.md'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 150)
+  }
 }
 
 function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
@@ -331,6 +371,50 @@ function nextAIPosition(): { x: number; y: number } {
   }
 }
 
+async function exportNodeData(nodeId: string, fmt: ExportFormat) {
+  const node = schemaStore.nodes.find((n) => n.id === nodeId)
+  if (!node) return
+
+  if (node.kind === 'markdown') {
+    // Markdown nodes: export raw content as .md
+    if (IS_DESKTOP) {
+      const { SaveFileWithDialog } = await import('../wailsjs/go/main/App')
+      await SaveFileWithDialog(`${node.name}.md`, node.content)
+    } else {
+      const url = URL.createObjectURL(new Blob([node.content], { type: 'text/markdown' }))
+      const a = document.createElement('a')
+      a.href = url; a.download = `${node.name}.md`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 150)
+    }
+    return
+  }
+
+  let columns: string[] = []
+  let rows: Record<string, unknown>[] = []
+
+  if (node.kind === 'query') {
+    const cached = queryResults[nodeId]
+    if (cached && !cached.error && !cached.isRunning) {
+      columns = cached.columns; rows = cached.rows as Record<string, unknown>[]
+    } else if (node.sql.trim()) {
+      const result = await query(node.sql)
+      columns = result.columns; rows = result.rows as Record<string, unknown>[]
+    }
+  } else if (node.kind === 'chart') {
+    const sourceId = node.sourceId
+    const cached = sourceId ? queryResults[sourceId] : chartResults[nodeId]
+    if (cached && !cached.error && !cached.isRunning) {
+      columns = cached.columns; rows = cached.rows as Record<string, unknown>[]
+    } else if (!sourceId && node.sql.trim()) {
+      const result = await query(node.sql)
+      columns = result.columns; rows = result.rows as Record<string, unknown>[]
+    }
+  }
+
+  if (columns.length) exportData(fmt, columns, rows, node.name)
+}
+
 function handleCanvasAction(action: main.CanvasAction) {
   if (action.type === 'clear') {
     schemaStore.clear()
@@ -343,6 +427,13 @@ function handleCanvasAction(action: main.CanvasAction) {
     } else {
       setTimeout(() => canvasRef.value?.fitView(), 60)
     }
+    return
+  }
+  if (action.type === 'export') {
+    const a = action as any
+    const fmt = (a.exportFormat ?? 'csv') as ExportFormat
+    const nodeId = a.nodeId as string | undefined
+    if (nodeId) exportNodeData(nodeId, fmt)
     return
   }
   const pos = action.hasPosition ? { x: action.x ?? 0, y: action.y ?? 0 } : nextAIPosition()
@@ -370,6 +461,11 @@ function handleCanvasAction(action: main.CanvasAction) {
   if (!action.hasPosition) setTimeout(() => canvasRef.value?.fitView(), 120)
 }
 
+async function onImportCreated(_tableName: string) {
+  await queryPanelRef.value?.refreshStats()
+  setTimeout(() => canvasRef.value?.fitView(), 120)
+}
+
 // ── Sample datasets ───────────────────────────────────────────────────────────
 async function loadDataset(id: string) {
   showDatasetPicker.value = false
@@ -390,6 +486,8 @@ async function loadDataset(id: string) {
     setTimeout(() => canvasRef.value?.fitView(), 200)
   } catch (e) {
     console.error('loadDataset failed', e)
+    loadError.value = e instanceof Error ? e.message : String(e)
+    setTimeout(() => { loadError.value = null }, 6000)
   }
 }
 
@@ -406,27 +504,98 @@ function connectMCPStream() {
   mcpStream.addEventListener('open', () => { aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null })
 }
 
+async function onToolbarDblClick() {
+  if (!IS_DESKTOP) return
+  const { WindowToggleMaximise } = await import('../wailsjs/runtime/runtime')
+  WindowToggleMaximise()
+}
+
 function onGlobalKey(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-    e.preventDefault()
-    showSettings.value = !showSettings.value
+  // ⌘ / Ctrl combos — always active
+  if (e.metaKey || e.ctrlKey) {
+    if (e.key === ',') { e.preventDefault(); showSettings.value = !showSettings.value }
+    if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
+    if (e.key === '-') { e.preventDefault(); canvasRef.value?.zoomOut() }
+    if (e.key === '0') { e.preventDefault(); canvasRef.value?.fitView() }
+    return
+  }
+  if (e.altKey) return
+
+  // Bare-key canvas hotkeys — skip when focus is inside an input / editor
+  const tag = (e.target as HTMLElement).tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
+
+  switch (e.key.toLowerCase()) {
+    case 'q': if (isReady.value) { e.preventDefault(); addQueryNode() } break
+    case 'c': if (isReady.value) { e.preventDefault(); addChartNode() } break
+    case 'n': e.preventDefault(); addMarkdownNode(); break
+    case 's': e.preventDefault(); addSection(); break
+    case 'i': if (isReady.value) { e.preventDefault(); showImport.value = true } break
+    case 'f': e.preventDefault(); canvasRef.value?.fitView(); break
+    case 'l': e.preventDefault(); showSidebar.value = !showSidebar.value; break
+    case '/': e.preventDefault(); showQuery.value = !showQuery.value; break
+    case '?': e.preventDefault(); showHelp.value = !showHelp.value; break
   }
 }
 
 onMounted(async () => {
   if (IS_DESKTOP) {
-    const { OnFileDrop } = await import('../wailsjs/runtime/runtime')
+    const { OnFileDrop, EventsOn } = await import('../wailsjs/runtime/runtime')
     OnFileDrop(handleFileDrop, false)
     connectMCPStream()
+    // Native menu → frontend bridge
+    EventsOn('menu:add-query',      () => addQueryNode())
+    EventsOn('menu:add-chart',      () => addChartNode())
+    EventsOn('menu:add-note',       () => addMarkdownNode())
+    EventsOn('menu:add-section',    () => addSection())
+    EventsOn('menu:import',         () => { showImport.value = true })
+    EventsOn('menu:fit-view',       () => canvasRef.value?.fitView())
+    EventsOn('menu:zoom-in',        () => canvasRef.value?.zoomIn())
+    EventsOn('menu:zoom-out',       () => canvasRef.value?.zoomOut())
+    EventsOn('menu:zoom-reset',     () => canvasRef.value?.fitView())
+    EventsOn('menu:toggle-layers',  () => { showSidebar.value = !showSidebar.value })
+    EventsOn('menu:toggle-query',   () => { showQuery.value = !showQuery.value })
+    EventsOn('menu:shortcuts',      () => { showHelp.value = !showHelp.value })
   }
   window.addEventListener('keydown', onGlobalKey)
+  // Startup update check — quiet, non-blocking
+  if (IS_DESKTOP) {
+    import('../wailsjs/go/main/App').then(({ CheckForUpdate }) =>
+      CheckForUpdate().then(info => { if (info?.hasUpdate) updateBanner.value = true }).catch(() => {})
+    )
+  }
   await loadTheme()
   try {
     await init()
     const restored = await loadAll()
     if (!restored) {
-      showDatasetPicker.value = true
+      if (IS_DESKTOP) {
+        showDatasetPicker.value = true
+      } else {
+        // Web: seed the canvas with the Quickstart guide so new users aren't
+        // staring at a blank screen. The Samples picker can be opened manually.
+        schemaStore.addMarkdownNode({
+          id: 'web_quickstart',
+          name: 'quickstart',
+          x: 60,
+          y: 60,
+          content: WEB_QUICKSTART,
+        })
+      }
     }
+
+    // Re-register any QueryNodes that were published as views before the session
+    // ended. DuckDB is in-memory so views don't survive a restart.
+    const viewNodes = schemaStore.nodes
+      .filter((n) => n.kind === 'query')
+      .map((n) => n as import('./stores/schema').QueryNode)
+      .filter((n) => n.isView && n.sql.trim())
+    await Promise.allSettled(
+      viewNodes.map((n) =>
+        exec(`CREATE OR REPLACE VIEW "${n.name.replace(/"/g, '""')}" AS ${n.sql}`),
+      ),
+    )
+
     await queryPanelRef.value?.refreshStats()
     startAutoSave()
     markAppReady()
@@ -446,10 +615,17 @@ onUnmounted(async () => {
 
 <template>
   <div class="app-shell">
+    <!-- Update available banner -->
+    <div v-if="updateBanner" class="update-banner">
+      <span>A new version of sql.garden is available.</span>
+      <button class="update-banner-settings" @click="settingsInitialTab = 'updates'; showSettings = true">View in Settings</button>
+      <button class="update-banner-close" @click="updateBanner = false">✕</button>
+    </div>
+
     <!-- Toolbar -->
-    <header class="toolbar">
+    <header class="toolbar" @dblclick.self="onToolbarDblClick">
       <!-- macOS traffic-light spacer (TitleBarHiddenInset — desktop only) -->
-      <div v-if="IS_DESKTOP" class="macos-inset" />
+      <div v-if="IS_DESKTOP" class="macos-inset" @dblclick="onToolbarDblClick" />
 
       <div class="toolbar-center">
         <div class="db-status" :class="{ ready: isReady, loading: isLoading, error: !!initError }">
@@ -461,35 +637,6 @@ onUnmounted(async () => {
       </div>
 
       <div class="toolbar-right">
-        <button class="toolbar-btn" :disabled="!isReady" title="Add a query node to the canvas" @click="addQueryNode">
-          <svg viewBox="0 0 16 16" fill="none">
-            <polyline points="2,5 6,9 2,13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-            <line x1="8" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <line x1="8" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <line x1="8" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-          </svg>
-          Query
-        </button>
-
-        <button class="toolbar-btn" :disabled="!isReady" title="Add a chart node to the canvas" @click="addChartNode">
-          <svg viewBox="0 0 16 16" fill="none">
-            <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/>
-            <polyline points="3,11 6,6 9,9 13,4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          Chart
-        </button>
-
-        <button class="toolbar-btn" title="Add a markdown note to the canvas" @click="addMarkdownNode">
-          <svg viewBox="0 0 16 16" fill="none">
-            <rect x="1" y="2" width="14" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/>
-            <line x1="4" y1="6" x2="12" y2="6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="4" y1="9" x2="9" y2="9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-          </svg>
-          Note
-        </button>
-
-        <div class="toolbar-divider" />
-
         <button
           class="toolbar-btn"
           :disabled="!isReady"
@@ -637,10 +784,49 @@ onUnmounted(async () => {
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" />
       <Canvas ref="canvasRef" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
+
+      <!-- Help button + panel -->
+      <button
+        class="help-btn"
+        :class="{ active: showHelp }"
+        title="Help & keyboard shortcuts (?)"
+        @click="showHelp = !showHelp"
+      >?</button>
+      <HelpPanel
+        v-if="showHelp"
+        @close="showHelp = false"
+        @open-mcp-settings="showHelp = false; settingsInitialTab = 'mcp'; showSettings = true"
+      />
+
+      <!-- Floating action bar -->
+      <div class="fab">
+        <button class="fab-btn" :disabled="!isReady" title="Query — add SQL node (Q)" @click="addQueryNode">
+          <span class="fab-badge">SQL</span>
+        </button>
+
+        <div class="fab-divider" />
+
+        <button class="fab-btn" :disabled="!isReady" title="Chart — add chart node (C)" @click="addChartNode">
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/>
+            <polyline points="3,11 6,6 9,9 13,4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <div class="fab-divider" />
+
+        <button class="fab-btn" title="Note — add markdown node (N)" @click="addMarkdownNode">
+          <span class="fab-badge">MD</span>
+        </button>
+      </div>
     </div>
 
     <!-- Settings modal -->
-    <SettingsModal v-if="showSettings" @close="showSettings = false" />
+    <SettingsModal
+      v-if="showSettings"
+      :initial-tab="settingsInitialTab"
+      @close="showSettings = false; settingsInitialTab = undefined"
+    />
 
     <!-- Dataset picker modal -->
     <DatasetPickerModal
@@ -649,14 +835,26 @@ onUnmounted(async () => {
       @load="loadDataset"
     />
 
+    <!-- Chart properties panel (Figma-style right rail) -->
+    <ChartPropertiesPanel />
+
+
     <!-- Import modal -->
     <ImportModal
       v-if="showImport"
       ref="importModalRef"
       :initial-paths="initialPathsForModal"
       :web-file-input="webFileInputRef"
-      @close="showImport = false; initialPathsForModal = []"
+@close="showImport = false; initialPathsForModal = []"
+      @created="onImportCreated"
     />
+
+    <!-- Dataset load error toast -->
+    <Transition name="toast">
+      <div v-if="loadError" class="load-error-toast">
+        <span>⚠ Failed to load dataset: {{ loadError }}</span>
+      </div>
+    </Transition>
 
     <!-- Init error overlay -->
     <div v-if="initError" class="error-overlay">
@@ -679,6 +877,37 @@ onUnmounted(async () => {
   flex-direction: column;
   overflow: hidden;
 }
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: rgba(240, 168, 0, 0.12);
+  border-bottom: 1px solid rgba(240, 168, 0, 0.3);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.update-banner-settings {
+  font-size: 12px;
+  font-weight: 500;
+  color: #f0a800;
+  background: none;
+  border: none;
+  padding: 0;
+  text-decoration: underline;
+}
+.update-banner-settings:hover { opacity: 0.8; }
+.update-banner-close {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 0 4px;
+}
+.update-banner-close:hover { color: var(--text-primary); }
 
 .toolbar {
   height: 44px;
@@ -817,6 +1046,101 @@ onUnmounted(async () => {
   position: relative;
 }
 
+/* ── Floating action bar ─────────────────────────────────────────────────── */
+.fab {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.fab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 16px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.fab-btn svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.fab-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+
+.fab-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.fab-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.fab-divider {
+  width: 1px;
+  height: 36px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+/* ── Help button ─────────────────────────────────────────────────────────── */
+.help-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  z-index: 20;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  -webkit-app-region: no-drag;
+}
+.help-btn:hover, .help-btn.active {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
 /* Left rail — sits below the macOS traffic lights */
 .left-rail {
   width: 44px;
@@ -907,6 +1231,27 @@ onUnmounted(async () => {
 .error-hint a {
   color: var(--accent);
 }
+
+.load-error-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #c0392b;
+  color: #fff;
+  font-size: 12.5px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  z-index: 2000;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast-enter-active, .toast-leave-active { transition: opacity 0.25s, transform 0.25s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(8px); }
 
 
 </style>

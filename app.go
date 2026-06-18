@@ -17,6 +17,8 @@ import (
 	"time"
 
 	_ "github.com/marcboeker/go-duckdb"
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -61,6 +63,43 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	go a.startMCPServer()
+
+	runtime.MenuSetApplicationMenu(ctx, a.buildMenu())
+	runtime.MenuUpdateApplicationMenu(ctx)
+}
+
+func (a *App) emit(event string) func(*menu.CallbackData) {
+	return func(_ *menu.CallbackData) { runtime.EventsEmit(a.ctx, event) }
+}
+
+func (a *App) buildMenu() *menu.Menu {
+	m := menu.NewMenu()
+
+	// ── File ──────────────────────────────────────────────────────────────────
+	file := m.AddSubmenu("File")
+	file.AddText("Add Query",   keys.Combo("q", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-query"))
+	file.AddText("Add Chart",   keys.Combo("c", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-chart"))
+	file.AddText("Add Note",    keys.Combo("n", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-note"))
+	file.AddText("Add Section", keys.Combo("s", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-section"))
+	file.AddSeparator()
+	file.AddText("Import…", keys.CmdOrCtrl("i"), a.emit("menu:import"))
+
+	// ── View ──────────────────────────────────────────────────────────────────
+	view := m.AddSubmenu("View")
+	view.AddText("Fit View",           keys.Combo("f", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:fit-view"))
+	view.AddSeparator()
+	view.AddText("Zoom In",            keys.CmdOrCtrl("="),                                a.emit("menu:zoom-in"))
+	view.AddText("Zoom Out",           keys.CmdOrCtrl("-"),                                a.emit("menu:zoom-out"))
+	view.AddText("Actual Size",        keys.CmdOrCtrl("0"),                                a.emit("menu:zoom-reset"))
+	view.AddSeparator()
+	view.AddText("Toggle Layers",      keys.Combo("l", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-layers"))
+	view.AddText("Toggle Query Panel", keys.Combo("p", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-query"))
+
+	// ── Help ──────────────────────────────────────────────────────────────────
+	help := m.AddSubmenu("Help")
+	help.AddText("Keyboard Shortcuts", keys.CmdOrCtrl("/"), a.emit("menu:shortcuts"))
+
+	return m
 }
 
 func (a *App) shutdown(_ context.Context) {
@@ -448,6 +487,94 @@ func (a *App) CheckForUpdate() (UpdateInfo, error) {
 	}
 	info.HasUpdate = isNewerVersion(latest, strings.TrimPrefix(appVersion, "v"))
 	return info, nil
+}
+
+// MCPConfigStatus describes whether the Claude Desktop MCP config already
+// contains the sql-garden entry, and where the config file lives.
+type MCPConfigStatus struct {
+	Found       bool   `json:"found"`
+	Path        string `json:"path"`
+	Configured  bool   `json:"configured"`
+}
+
+// GetMCPConfigStatus detects the Claude Desktop config file and reports
+// whether sql-garden is already registered in it.
+func (a *App) GetMCPConfigStatus() MCPConfigStatus {
+	path, err := claudeDesktopConfigPath()
+	if err != nil {
+		return MCPConfigStatus{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return MCPConfigStatus{Found: true, Path: path}
+	}
+	return MCPConfigStatus{
+		Found:      true,
+		Path:       path,
+		Configured: strings.Contains(string(data), "sql-garden"),
+	}
+}
+
+// WriteMCPToClaudeDesktop merges the sql-garden MCP entry into the Claude
+// Desktop config file, creating it if it does not yet exist.
+func (a *App) WriteMCPToClaudeDesktop() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	path, pathErr := claudeDesktopConfigPath()
+	if pathErr != nil {
+		// File doesn't exist yet — create at the standard macOS location.
+		path = filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	var cfg map[string]interface{}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &cfg)
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+
+	servers, _ := cfg["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		servers = make(map[string]interface{})
+	}
+	servers["sql-garden"] = map[string]interface{}{
+		"url": fmt.Sprintf("http://127.0.0.1:%d/mcp", MCPPort),
+	}
+	cfg["mcpServers"] = servers
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, out, 0o644)
+}
+
+func claudeDesktopConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	candidates := []string{
+		filepath.Join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+		filepath.Join(os.Getenv("APPDATA"), "Claude", "claude_desktop_config.json"),
+		filepath.Join(home, ".config", "Claude", "claude_desktop_config.json"),
+	}
+	for _, p := range candidates {
+		if p == filepath.Join("", "Claude", "claude_desktop_config.json") {
+			continue // skip empty APPDATA
+		}
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("claude_desktop_config.json not found")
 }
 
 // isNewerVersion returns true if candidate is strictly newer than current.
@@ -914,6 +1041,39 @@ func (a *App) OpenMultipleFilesDialog() ([]string, error) {
 			{DisplayName: "Data files", Pattern: "*.csv;*.tsv;*.parquet;*.json;*.jsonl;*.sqlite;*.db"},
 		},
 	})
+}
+
+// SaveFileWithDialog shows the native save-file dialog pre-filled with the
+// suggested filename, then writes content to the chosen path.
+// Returns the path written to, or an empty string if the user cancelled.
+func (a *App) SaveFileWithDialog(suggestedName, content string) (string, error) {
+	ext := strings.TrimPrefix(filepath.Ext(suggestedName), ".")
+
+	filterMap := map[string]runtime.FileFilter{
+		"csv":  {DisplayName: "CSV (*.csv)", Pattern: "*.csv"},
+		"tsv":  {DisplayName: "TSV (*.tsv)", Pattern: "*.tsv"},
+		"json": {DisplayName: "JSON (*.json)", Pattern: "*.json"},
+		"md":   {DisplayName: "Markdown (*.md)", Pattern: "*.md"},
+	}
+	filters := []runtime.FileFilter{}
+	if f, ok := filterMap[ext]; ok {
+		filters = append(filters, f)
+	}
+	filters = append(filters, runtime.FileFilter{DisplayName: "All files", Pattern: "*.*"})
+
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Save file",
+		DefaultFilename: suggestedName,
+		Filters:         filters,
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("writing file: %w", err)
+	}
+	return path, nil
 }
 
 // ImportSqliteFromBase64 imports all user tables from a SQLite database file.

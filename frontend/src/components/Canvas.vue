@@ -8,9 +8,11 @@ import SectionCard from './SectionCard.vue'
 import { useSchemaStore } from '../stores/schema'
 import type { CanvasNode, SectionNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
+import { useTableOps } from '../composables/useTableOps'
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
+const { dropTable } = useTableOps()
 
 const pan = ref({ x: 100, y: 60 })
 const zoom = ref(1)
@@ -111,19 +113,30 @@ const transformStyle = computed(() => ({
 
 const zoomPct = computed(() => Math.round(zoom.value * 100))
 
-function onWheel(e: WheelEvent) {
-  e.preventDefault()
-  const delta = e.ctrlKey ? e.deltaY * 0.01 : e.deltaY * 0.001
-  const factor = Math.exp(-delta)
+function applyZoomAt(factor: number, cx: number, cy: number) {
   const newZoom = Math.min(4, Math.max(0.08, zoom.value * factor))
-  const rect = viewportRef.value!.getBoundingClientRect()
-  const cx = e.clientX - rect.left
-  const cy = e.clientY - rect.top
   pan.value = {
     x: cx - (cx - pan.value.x) * (newZoom / zoom.value),
     y: cy - (cy - pan.value.y) * (newZoom / zoom.value),
   }
   zoom.value = newZoom
+}
+
+function onWheel(e: WheelEvent) {
+  e.preventDefault()
+  const delta = e.ctrlKey ? e.deltaY * 0.01 : e.deltaY * 0.001
+  const rect = viewportRef.value!.getBoundingClientRect()
+  applyZoomAt(Math.exp(-delta), e.clientX - rect.left, e.clientY - rect.top)
+}
+
+function zoomIn() {
+  const rect = viewportRef.value?.getBoundingClientRect()
+  applyZoomAt(1.25, rect ? rect.width / 2 : 600, rect ? rect.height / 2 : 400)
+}
+
+function zoomOut() {
+  const rect = viewportRef.value?.getBoundingClientRect()
+  applyZoomAt(0.8, rect ? rect.width / 2 : 600, rect ? rect.height / 2 : 400)
 }
 
 function onMouseDown(e: MouseEvent) {
@@ -234,7 +247,11 @@ function onKeyDown(e: KeyboardEvent) {
 
   if ((e.key === 'Delete' || e.key === 'Backspace') && !inInput && selectedIds.value.size > 0) {
     e.preventDefault()
-    for (const id of selectedIds.value) schemaStore.removeNode(id)
+    for (const id of selectedIds.value) {
+      const node = schemaStore.nodes.find((n) => n.id === id)
+      if (node?.kind === 'table') dropTable(id, node.name)
+      else schemaStore.removeNode(id)
+    }
     clearSelection()
   }
 
@@ -297,7 +314,7 @@ function focusNode(id: string) {
 
 function resetZoom() { zoom.value = 1 }
 
-defineExpose({ fitView, resetZoom, getCenter, focusNode, zoom, pan })
+defineExpose({ fitView, resetZoom, zoomIn, zoomOut, getCenter, focusNode, zoom, pan })
 
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)

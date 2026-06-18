@@ -5,7 +5,7 @@ import { useSchemaStore } from '../stores/schema'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
 import { useAppReady } from '../composables/useAppReady'
-import { CreateView, DropView } from '../../wailsjs/go/main/App'
+import { exportData, type ExportFormat } from '../lib/exportData'
 
 const props = defineProps<{ node: QueryNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -14,9 +14,17 @@ const emit = defineEmits<{
 }>()
 
 const schemaStore = useSchemaStore()
-const { query } = useDuckDB()
+const { query, exec } = useDuckDB()
 const { results: queryResults, setResult } = useQueryResults()
 const { isAppReady } = useAppReady()
+
+// ── View helpers (works in both desktop and web/WASM) ─────────────────────────
+function sqlCreateView(name: string, sql: string) {
+  return exec(`CREATE OR REPLACE VIEW "${name.replace(/"/g, '""')}" AS ${sql}`)
+}
+function sqlDropView(name: string) {
+  return exec(`DROP VIEW IF EXISTS "${name.replace(/"/g, '""')}"`)
+}
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
 const activeTab = ref<'sql' | 'results'>('sql')
@@ -25,6 +33,10 @@ const resultRowCount = computed(() => {
   const r = nodeResult.value
   return (r && !r.error && !r.isRunning) ? r.rows.length : null
 })
+
+const TABLE_DISPLAY_CAP = 500
+const displayRows = computed(() => nodeResult.value?.rows.slice(0, TABLE_DISPLAY_CAP) ?? [])
+const isCapped = computed(() => (nodeResult.value?.rows.length ?? 0) > TABLE_DISPLAY_CAP)
 
 // ── View mode ─────────────────────────────────────────────────────────────────
 const isCollapsed = computed(() => props.node.viewMode === 'collapsed')
@@ -68,10 +80,10 @@ async function toggleView(e: MouseEvent) {
   viewError.value = null
   try {
     if (!wasView) {
-      await CreateView(props.node.name, sql)
+      await sqlCreateView(props.node.name, sql)
       schemaStore.setQueryIsView(props.node.id, true)
     } else {
-      await DropView(props.node.name)
+      await sqlDropView(props.node.name)
       schemaStore.setQueryIsView(props.node.id, false)
     }
   } catch (err) {
@@ -102,8 +114,8 @@ async function commitRename() {
   schemaStore.renameNode(props.node.id, newName)
   if (props.node.isView) {
     try {
-      await DropView(oldName)
-      if (localSql.value.trim()) await CreateView(newName, localSql.value)
+      await sqlDropView(oldName)
+      if (localSql.value.trim()) await sqlCreateView(newName, localSql.value)
     } catch (err) {
       viewError.value = err instanceof Error ? err.message : String(err)
     }
@@ -140,11 +152,11 @@ function createChart() {
 
 // ── Export ─────────────────────────────────────────────────────────────────────
 const hasLimitInSql = computed(() => /\bLIMIT\b/i.test(localSql.value))
-const exportPending = ref<'csv' | 'tsv' | 'json' | 'md' | null>(null)
+const exportPending = ref<ExportFormat | null>(null)
 const isExporting = ref(false)
 const exportError = ref<string | null>(null)
 
-function onExportClick(fmt: 'csv' | 'tsv' | 'json' | 'md') {
+function onExportClick(fmt: ExportFormat) {
   exportError.value = null
   const r = nodeResult.value
   if (!r || r.isRunning || r.error) return
@@ -152,42 +164,7 @@ function onExportClick(fmt: 'csv' | 'tsv' | 'json' | 'md') {
     exportPending.value = fmt
     return
   }
-  doExport(fmt, r.columns, r.rows as Record<string, unknown>[])
-}
-
-function doExport(fmt: string, columns: string[], rows: Record<string, unknown>[]) {
-  let content: string
-  let mimeType: string
-  let ext: string
-
-  if (fmt === 'csv') {
-    const esc = (v: unknown) => {
-      const s = v === null || v === undefined ? '' : String(v)
-      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
-    }
-    content = [columns.join(','), ...rows.map((r) => columns.map((c) => esc(r[c])).join(','))].join('\n')
-    mimeType = 'text/csv'; ext = 'csv'
-  } else if (fmt === 'tsv') {
-    content = [columns.join('\t'), ...rows.map((r) => columns.map((c) => String(r[c] ?? '')).join('\t'))].join('\n')
-    mimeType = 'text/tab-separated-values'; ext = 'tsv'
-  } else if (fmt === 'json') {
-    content = JSON.stringify(rows, null, 2)
-    mimeType = 'application/json'; ext = 'json'
-  } else {
-    const sep = '| ' + columns.map(() => '---').join(' | ') + ' |'
-    const header = '| ' + columns.join(' | ') + ' |'
-    const body = rows.map((r) => '| ' + columns.map((c) => String(r[c] ?? '')).join(' | ') + ' |').join('\n')
-    content = [header, sep, body].join('\n')
-    mimeType = 'text/plain'; ext = 'md'
-  }
-
-  const blob = new Blob([content], { type: mimeType })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${props.node.name}.${ext}`
-  a.click()
-  URL.revokeObjectURL(url)
+  exportData(fmt, r.columns, r.rows as Record<string, unknown>[], props.node.name)
   exportPending.value = null
 }
 
@@ -200,7 +177,7 @@ async function exportWithoutLimit() {
   exportError.value = null
   try {
     const result = await query(stripped)
-    doExport(fmt, result.columns, result.rows as Record<string, unknown>[])
+    exportData(fmt, result.columns, result.rows as Record<string, unknown>[], props.node.name)
   } catch (err) {
     exportError.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -219,7 +196,7 @@ function onSqlInput() {
   sqlTimer = setTimeout(() => {
     schemaStore.updateQuerySql(props.node.id, localSql.value)
     if (props.node.isView && localSql.value.trim()) {
-      CreateView(props.node.name, localSql.value).catch((err) => {
+      sqlCreateView(props.node.name, localSql.value).catch((err) => {
         viewError.value = err instanceof Error ? err.message : String(err)
       })
     }
@@ -387,7 +364,7 @@ onUnmounted(() => {
       <!-- Limit confirmation -->
       <div v-if="exportPending" class="export-confirm" @mousedown.stop>
         <span>{{ nodeResult?.rows.length }} rows (limited). Export anyway?</span>
-        <button class="export-confirm-btn" @click.stop="doExport(exportPending, nodeResult!.columns, nodeResult!.rows as Record<string, unknown>[])">Export {{ nodeResult?.rows.length }}</button>
+        <button class="export-confirm-btn" @click.stop="exportData(exportPending!, nodeResult!.columns, nodeResult!.rows as Record<string, unknown>[], node.name); exportPending = null">Export {{ nodeResult?.rows.length }}</button>
         <button class="export-confirm-btn accent" @click.stop="exportWithoutLimit">Re-run without LIMIT</button>
         <button class="export-dismiss" @click.stop="exportPending = null">✕</button>
       </div>
@@ -400,13 +377,16 @@ onUnmounted(() => {
               <tr><th v-for="col in nodeResult.columns" :key="col">{{ col }}</th></tr>
             </thead>
             <tbody>
-              <tr v-for="(row, i) in nodeResult.rows" :key="i">
+              <tr v-for="(row, i) in displayRows" :key="i">
                 <td v-for="col in nodeResult.columns" :key="col" :class="{ 'is-null': row[col] == null }">
                   {{ row[col] == null ? 'NULL' : String(row[col]) }}
                 </td>
               </tr>
             </tbody>
           </table>
+        </div>
+        <div v-if="isCapped" class="results-cap-notice">
+          Showing {{ TABLE_DISPLAY_CAP.toLocaleString() }} of {{ nodeResult.rows.length.toLocaleString() }} rows — export for full data
         </div>
       </template>
       <div v-else-if="nodeResult?.isRunning" class="results-state">Running…</div>
@@ -750,6 +730,16 @@ onUnmounted(() => {
 }
 
 .results-error { color: var(--error); font-style: normal; }
+
+.results-cap-notice {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-0);
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
 
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .card-footer {
