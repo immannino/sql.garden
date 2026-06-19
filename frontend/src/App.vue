@@ -504,14 +504,21 @@ function connectMCPStream() {
   mcpStream.addEventListener('open', () => { aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null })
 }
 
-async function onToolbarDblClick() {
+async function onToolbarDblClick(e: MouseEvent) {
   if (!IS_DESKTOP) return
+  if ((e.target as HTMLElement).closest('button, a, input, select')) return
   const { WindowToggleMaximise } = await import('../wailsjs/runtime/runtime')
   WindowToggleMaximise()
 }
 
 function onGlobalKey(e: KeyboardEvent) {
-  // ⌘ / Ctrl combos — always active
+  // Never intercept when focus is in a text field or code editor
+  const target = e.target as HTMLElement
+  const tag = target.tagName
+  const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
+    || target.closest('.cm-editor') !== null
+  if (inInput) return
+
   if (e.metaKey || e.ctrlKey) {
     if (e.key === ',') { e.preventDefault(); showSettings.value = !showSettings.value }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
@@ -520,10 +527,6 @@ function onGlobalKey(e: KeyboardEvent) {
     return
   }
   if (e.altKey) return
-
-  // Bare-key canvas hotkeys — skip when focus is inside an input / editor
-  const tag = (e.target as HTMLElement).tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return
 
   switch (e.key.toLowerCase()) {
     case 'q': if (isReady.value) { e.preventDefault(); addQueryNode() } break
@@ -623,9 +626,9 @@ onUnmounted(async () => {
     </div>
 
     <!-- Toolbar -->
-    <header class="toolbar" @dblclick.self="onToolbarDblClick">
+    <header class="toolbar" @dblclick="onToolbarDblClick">
       <!-- macOS traffic-light spacer (TitleBarHiddenInset — desktop only) -->
-      <div v-if="IS_DESKTOP" class="macos-inset" @dblclick="onToolbarDblClick" />
+      <div v-if="IS_DESKTOP" class="macos-inset" />
 
       <div class="toolbar-center">
         <div class="db-status" :class="{ ready: isReady, loading: isLoading, error: !!initError }">
@@ -920,20 +923,28 @@ onUnmounted(async () => {
   gap: 12px;
   z-index: 10;
   /* Allow dragging the window from the toolbar */
-  -webkit-app-region: drag;
+  --wails-draggable: drag;
 }
 
-/* Make interactive elements non-draggable inside the drag zone */
+/* Non-interactive toolbar regions — explicitly draggable so the full bar height works */
+.macos-inset,
+.toolbar-center,
+.toolbar-divider {
+  --wails-draggable: drag;
+}
+
+/* Interactive elements opt out of drag */
 .toolbar button,
 .toolbar a,
 .toolbar input {
-  -webkit-app-region: no-drag;
+  --wails-draggable: no-drag;
 }
 
 /* Spacer that matches the macOS traffic-light inset width */
 .macos-inset {
   width: 80px;
   flex-shrink: 0;
+  height: 100%;
 }
 
 .toolbar-right {
@@ -949,6 +960,7 @@ onUnmounted(async () => {
   align-items: center;
   justify-content: center;
   flex: 1;
+  height: 100%;
 }
 
 .db-status {
@@ -1077,7 +1089,7 @@ onUnmounted(async () => {
   border-radius: 9px;
   cursor: pointer;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
-  -webkit-app-region: no-drag;
+
 }
 
 .fab-btn svg {
@@ -1133,7 +1145,7 @@ onUnmounted(async () => {
   justify-content: center;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   transition: color 0.15s, background 0.15s, border-color 0.15s;
-  -webkit-app-region: no-drag;
+
 }
 .help-btn:hover, .help-btn.active {
   color: var(--text-primary);

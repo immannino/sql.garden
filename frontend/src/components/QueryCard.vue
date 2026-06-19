@@ -6,6 +6,8 @@ import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
 import { useAppReady } from '../composables/useAppReady'
 import { exportData, type ExportFormat } from '../lib/exportData'
+import SqlEditor from './SqlEditor.vue'
+import { useSchemaCompletions } from '../composables/useSchemaCompletions'
 
 const props = defineProps<{ node: QueryNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -15,6 +17,7 @@ const emit = defineEmits<{
 
 const schemaStore = useSchemaStore()
 const { query, exec } = useDuckDB()
+const { sqlSchema } = useSchemaCompletions()
 const { results: queryResults, setResult } = useQueryResults()
 const { isAppReady } = useAppReady()
 
@@ -191,7 +194,8 @@ let sqlTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(() => props.node.sql, (v) => { if (v !== localSql.value) localSql.value = v })
 
-function onSqlInput() {
+function onSqlChange(value: string) {
+  localSql.value = value
   if (sqlTimer) clearTimeout(sqlTimer)
   sqlTimer = setTimeout(() => {
     schemaStore.updateQuerySql(props.node.id, localSql.value)
@@ -234,9 +238,6 @@ async function run(e?: MouseEvent) {
   }
 }
 
-function onKeyDown(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run() }
-}
 
 onMounted(() => {
   if (!props.node.sql.trim()) return
@@ -339,14 +340,12 @@ onUnmounted(() => {
 
     <!-- SQL editor -->
     <div v-show="activeTab === 'sql'" class="card-body" @mousedown.stop>
-      <textarea
-        v-model="localSql"
-        class="sql-editor"
-        spellcheck="false"
-        placeholder="SELECT * FROM ..."
-        :style="{ height: `${node.h ?? 84}px` }"
-        @input="onSqlInput"
-        @keydown="onKeyDown"
+      <SqlEditor
+        :model-value="localSql"
+        :height="node.h ?? 84"
+        :schema="sqlSchema"
+        @update:model-value="onSqlChange"
+        @run="run()"
       />
     </div>
 
@@ -641,27 +640,10 @@ onUnmounted(() => {
   padding: 0;
 }
 
-.sql-editor {
-  width: 100%;
-  min-height: 60px;
-  resize: none;
-  background: var(--surface-0);
-  color: var(--text-primary);
-  border: none;
+.card-body :deep(.sql-editor-wrap) {
   border-bottom: 1px solid var(--border);
-  outline: none;
-  padding: 8px 10px;
-  font-size: 11.5px;
-  line-height: 1.6;
-  font-family: var(--font-mono);
-  tab-size: 2;
-  display: block;
-  cursor: text;
-  box-sizing: border-box;
-  overflow: auto;
+  background: var(--surface-0);
 }
-
-.sql-editor::placeholder { color: var(--text-muted); }
 
 /* ── Results ─────────────────────────────────────────────────────────────── */
 .card-results {

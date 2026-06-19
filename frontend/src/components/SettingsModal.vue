@@ -284,7 +284,7 @@ function onBackdrop(e: MouseEvent) {
                 </svg>
               </a>
 
-              <a v-else class="ext-link" href="https://github.com/tonymannino/sql.garden/releases" target="_blank">
+              <a v-else class="ext-link" href="https://github.com/immannino/sql.garden/releases" target="_blank">
                 View all releases
                 <svg viewBox="0 0 12 12" fill="none">
                   <path d="M2 10L10 2M5 2h5v5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>

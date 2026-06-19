@@ -5,10 +5,13 @@ import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
 import { usePersistence } from '../composables/usePersistence'
+import SqlEditor from './SqlEditor.vue'
+import { useSchemaCompletions } from '../composables/useSchemaCompletions'
 
 const { isReady, query, getTableInfo } = useDuckDB()
 const { saveTable } = usePersistence()
 const schemaStore = useSchemaStore()
+const { sqlSchema } = useSchemaCompletions()
 const { pendingQuery } = useQueryBridge()
 const { dropTable } = useTableOps()
 
@@ -109,12 +112,6 @@ async function runQuery() {
   }
 }
 
-function onKeyDown(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-    e.preventDefault()
-    runQuery()
-  }
-}
 
 // ── Schema tab actions ────────────────────────────────────────────────────────
 function selectTable(name: string) {
@@ -216,12 +213,11 @@ defineExpose({ refreshStats })
     <!-- ── Query tab ─────────────────────────────────────────────────────── -->
     <template v-if="activeTab === 'query'">
       <div class="editor-area">
-        <textarea
+        <SqlEditor
           v-model="sql"
-          class="sql-input"
-          placeholder="SELECT * FROM users;"
-          spellcheck="false"
-          @keydown="onKeyDown"
+          :height="160"
+          :schema="sqlSchema"
+          @run="runQuery"
         />
         <div class="editor-actions">
           <button
@@ -467,23 +463,9 @@ defineExpose({ refreshStats })
   border-bottom: 1px solid var(--border);
 }
 
-.sql-input {
-  width: 100%;
-  min-height: 120px;
-  resize: vertical;
+.editor-area :deep(.sql-editor-wrap) {
   background: var(--surface-1);
-  color: var(--text-primary);
-  border: none;
-  outline: none;
-  padding: 12px 14px;
-  font-size: 12.5px;
-  line-height: 1.6;
-  font-family: var(--font-mono);
-  tab-size: 2;
-}
-
-.sql-input::placeholder {
-  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
 }
 
 .editor-actions {

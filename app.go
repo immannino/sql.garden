@@ -77,22 +77,22 @@ func (a *App) buildMenu() *menu.Menu {
 
 	// ── File ──────────────────────────────────────────────────────────────────
 	file := m.AddSubmenu("File")
-	file.AddText("Add Query",   keys.Combo("q", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-query"))
-	file.AddText("Add Chart",   keys.Combo("c", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-chart"))
-	file.AddText("Add Note",    keys.Combo("n", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-note"))
+	file.AddText("Add Query", keys.Combo("q", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-query"))
+	file.AddText("Add Chart", keys.Combo("c", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-chart"))
+	file.AddText("Add Note", keys.Combo("n", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-note"))
 	file.AddText("Add Section", keys.Combo("s", keys.CmdOrCtrlKey, keys.OptionOrAltKey), a.emit("menu:add-section"))
 	file.AddSeparator()
 	file.AddText("Import…", keys.CmdOrCtrl("i"), a.emit("menu:import"))
 
 	// ── View ──────────────────────────────────────────────────────────────────
 	view := m.AddSubmenu("View")
-	view.AddText("Fit View",           keys.Combo("f", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:fit-view"))
+	view.AddText("Fit View", keys.Combo("f", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:fit-view"))
 	view.AddSeparator()
-	view.AddText("Zoom In",            keys.CmdOrCtrl("="),                                a.emit("menu:zoom-in"))
-	view.AddText("Zoom Out",           keys.CmdOrCtrl("-"),                                a.emit("menu:zoom-out"))
-	view.AddText("Actual Size",        keys.CmdOrCtrl("0"),                                a.emit("menu:zoom-reset"))
+	view.AddText("Zoom In", keys.CmdOrCtrl("="), a.emit("menu:zoom-in"))
+	view.AddText("Zoom Out", keys.CmdOrCtrl("-"), a.emit("menu:zoom-out"))
+	view.AddText("Actual Size", keys.CmdOrCtrl("0"), a.emit("menu:zoom-reset"))
 	view.AddSeparator()
-	view.AddText("Toggle Layers",      keys.Combo("l", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-layers"))
+	view.AddText("Toggle Layers", keys.Combo("l", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-layers"))
 	view.AddText("Toggle Query Panel", keys.Combo("p", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-query"))
 
 	// ── Help ──────────────────────────────────────────────────────────────────
@@ -428,7 +428,7 @@ func (a *App) SaveAppSettings(s AppSettings) error {
 	return a.persist.saveSetting(appSettingsKey, string(raw))
 }
 
-const appVersion = "0.1.0-beta"
+const appVersion = "v0.0.0-alpha.4"
 
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
@@ -443,7 +443,7 @@ type UpdateInfo struct {
 
 // CheckForUpdate queries the GitHub releases API and returns version info.
 func (a *App) CheckForUpdate() (UpdateInfo, error) {
-	const repo = "tonymannino/sql.garden"
+	const repo = "immannino/sql.garden"
 	info := UpdateInfo{
 		CurrentVersion: appVersion,
 		ReleaseURL:     "https://github.com/" + repo + "/releases",
@@ -473,8 +473,8 @@ func (a *App) CheckForUpdate() (UpdateInfo, error) {
 	}
 
 	var payload struct {
-		TagName    string `json:"tag_name"`
-		HTMLURL    string `json:"html_url"`
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return info, err
@@ -492,9 +492,9 @@ func (a *App) CheckForUpdate() (UpdateInfo, error) {
 // MCPConfigStatus describes whether the Claude Desktop MCP config already
 // contains the sql-garden entry, and where the config file lives.
 type MCPConfigStatus struct {
-	Found       bool   `json:"found"`
-	Path        string `json:"path"`
-	Configured  bool   `json:"configured"`
+	Found      bool   `json:"found"`
+	Path       string `json:"path"`
+	Configured bool   `json:"configured"`
 }
 
 // GetMCPConfigStatus detects the Claude Desktop config file and reports
@@ -626,10 +626,10 @@ func (a *App) DeleteTableData(tableName string) error {
 // ── Types shared with the frontend ───────────────────────────────────────────
 
 type QueryResult struct {
-	Columns  []string         `json:"columns"`
-	Rows     []map[string]any `json:"rows"`
-	RowCount int              `json:"rowCount"`
-	DurationMs float64        `json:"durationMs"`
+	Columns    []string         `json:"columns"`
+	Rows       []map[string]any `json:"rows"`
+	RowCount   int              `json:"rowCount"`
+	DurationMs float64          `json:"durationMs"`
 }
 
 type ColumnInfo struct {
@@ -655,7 +655,7 @@ func (a *App) Query(query string) (QueryResult, error) {
 		return QueryResult{}, err
 	}
 
-	var result []map[string]any
+	result := make([]map[string]any, 0)
 	for rows.Next() {
 		vals := make([]any, len(cols))
 		ptrs := make([]any, len(cols))
@@ -787,9 +787,9 @@ func pgKVVal(s string) string {
 // The frontend passes a connection string; we attach it under a user-chosen alias.
 
 type AttachOptions struct {
-	Alias    string `json:"alias"`    // name used in SQL, e.g. "prod"
-	DSN      string `json:"dsn"`      // e.g. "dbname=mydb host=localhost"
-	Type     string `json:"type"`     // "postgres", "sqlite", "mysql", ""
+	Alias    string `json:"alias"` // name used in SQL, e.g. "prod"
+	DSN      string `json:"dsn"`   // e.g. "dbname=mydb host=localhost"
+	Type     string `json:"type"`  // "postgres", "sqlite", "mysql", ""
 	ReadOnly bool   `json:"readOnly"`
 }
 

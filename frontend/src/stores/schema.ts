@@ -177,6 +177,30 @@ export const useSchemaStore = defineStore('schema', () => {
     nodes.value = nodes.value.filter((n) => n.id !== id)
   }
 
+  function moveNodeToIndex(id: string, toStoreIndex: number) {
+    const from = nodes.value.findIndex((n) => n.id === id)
+    if (from === -1) return
+    const arr = [...nodes.value]
+    const [node] = arr.splice(from, 1)
+    const clampedTo = Math.max(0, Math.min(arr.length, toStoreIndex > from ? toStoreIndex - 1 : toStoreIndex))
+    arr.splice(clampedTo, 0, node)
+    nodes.value = arr
+  }
+
+  function bringToFront(id: string) {
+    const idx = nodes.value.findIndex((n) => n.id === id)
+    if (idx === -1 || idx === nodes.value.length - 1) return
+    const arr = nodes.value.filter((n) => n.id !== id)
+    nodes.value = [...arr, nodes.value[idx]]
+  }
+
+  function sendToBack(id: string) {
+    const idx = nodes.value.findIndex((n) => n.id === id)
+    if (idx === -1 || idx === 0) return
+    const arr = nodes.value.filter((n) => n.id !== id)
+    nodes.value = [nodes.value[idx], ...arr]
+  }
+
   function renameNode(id: string, newName: string) {
     const n = nodes.value.find((n) => n.id === id)
     if (n) { n.id = newName; n.name = newName }
@@ -237,6 +261,7 @@ export const useSchemaStore = defineStore('schema', () => {
     nodes,
     addTable, addQueryNode, addChartNode, addMarkdownNode, addSection,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
+    moveNodeToIndex, bringToFront, sendToBack,
     setRowCount, updateQuerySql, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
     setColorCursor, clear,
   }

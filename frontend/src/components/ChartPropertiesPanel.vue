@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import SqlEditor from './SqlEditor.vue'
+import { useSchemaCompletions } from '../composables/useSchemaCompletions'
 import { useSchemaStore } from '../stores/schema'
 import type { TableColumnConfig, ColumnFormatType, ColumnAlign, DatePattern } from '../stores/schema'
 import { useChartPanel } from '../composables/useChartPanel'
@@ -8,6 +10,7 @@ import { useQueryResults } from '../composables/useQueryResults'
 import { useDuckDB } from '../composables/useDuckDB'
 
 const schemaStore = useSchemaStore()
+const { sqlSchema } = useSchemaCompletions()
 const { panelChartId, closePanel } = useChartPanel()
 const { chartResults, setChartResult } = useChartResults()
 const { results: queryResults, setResult } = useQueryResults()
@@ -70,24 +73,9 @@ const availableColumns = computed(() => effectiveData.value?.columns ?? [])
 const localSql = ref('')
 watch(node, (n) => { if (n) localSql.value = n.sql }, { immediate: true })
 
-function onSqlInput(e: Event) {
-  localSql.value = (e.target as HTMLTextAreaElement).value
+function onSqlChange(value: string) {
+  localSql.value = value
   if (node.value) schemaStore.updateChartConfig(node.value.id, { sql: localSql.value })
-}
-
-function onSqlKeydown(e: KeyboardEvent) {
-  if (e.key === 'Tab') {
-    e.preventDefault()
-    const el = e.target as HTMLTextAreaElement
-    const start = el.selectionStart
-    const end = el.selectionEnd
-    localSql.value = localSql.value.slice(0, start) + '  ' + localSql.value.slice(end)
-    nextTick(() => { el.selectionStart = el.selectionEnd = start + 2 })
-  }
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-    e.preventDefault()
-    runInline()
-  }
 }
 
 // ── Run inline SQL ────────────────────────────────────────────────────────────
@@ -310,13 +298,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
           <!-- Inline SQL mode -->
           <template v-if="!node.sourceId">
-            <textarea
-              class="sql-editor"
-              placeholder="SELECT x, y FROM table"
-              :value="localSql"
-              spellcheck="false"
-              @input="onSqlInput"
-              @keydown="onSqlKeydown"
+            <SqlEditor
+              :model-value="localSql"
+              :height="120"
+              :schema="sqlSchema"
+              @update:model-value="onSqlChange"
+              @run="runInline"
             />
             <button
               class="run-btn"
@@ -785,24 +772,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 .source-tab:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── SQL editor ── */
-.sql-editor {
-  width: 100%;
-  min-height: 80px;
-  max-height: 160px;
-  padding: 7px 9px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--text-primary);
-  background: var(--surface-0, #0d1117);
+.pp-section :deep(.sql-editor-wrap) {
   border: 1px solid var(--border);
   border-radius: 5px;
-  resize: vertical;
-  outline: none;
-  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--surface-0, #0d1117);
   transition: border-color 0.12s;
 }
-.sql-editor:focus { border-color: var(--accent); }
+.pp-section :deep(.sql-editor-wrap:focus-within) { border-color: var(--accent); }
 
 /* ── Mermaid editor ── */
 .mermaid-editor {

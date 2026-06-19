@@ -18,9 +18,11 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:  "sql.garden",
-		Width:  1400,
-		Height: 900,
+		Title:           "sql.garden",
+		Width:           1400,
+		Height:          900,
+		CSSDragProperty: "--wails-draggable",
+		CSSDragValue:    "drag",
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

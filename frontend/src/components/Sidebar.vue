@@ -24,16 +24,60 @@ const { selectedIds, selectNode } = useSelection()
 
 // ── Layers tab ────────────────────────────────────────────────────────────────
 
-const groups = computed(() => [
-  { label: 'Tables',  kind: 'table',    nodes: schemaStore.nodes.filter((n) => n.kind === 'table')    },
-  { label: 'Queries', kind: 'query',    nodes: schemaStore.nodes.filter((n) => n.kind === 'query')    },
-  { label: 'Charts',  kind: 'chart',    nodes: schemaStore.nodes.filter((n) => n.kind === 'chart')    },
-  { label: 'Notes',   kind: 'markdown', nodes: schemaStore.nodes.filter((n) => n.kind === 'markdown') },
-] as const)
+// Display order is reversed: index 0 = frontmost (top of list), last = back
+const displayLayers = computed(() => [...schemaStore.nodes].reverse())
 
 function onItemClick(e: MouseEvent, node: CanvasNode) {
   selectNode(node.id, e.shiftKey)
   if (!e.shiftKey) emit('focusNode', node.id)
+}
+
+// Drag-to-reorder state
+const dragId = ref<string | null>(null)
+const dropIndex = ref<number | null>(null) // display-space insert position
+
+function onDragStart(e: DragEvent, id: string) {
+  dragId.value = id
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragOver(e: DragEvent, displayIdx: number) {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  const el = (e.currentTarget as HTMLElement)
+  const mid = el.getBoundingClientRect().top + el.offsetHeight / 2
+  dropIndex.value = e.clientY < mid ? displayIdx : displayIdx + 1
+}
+
+// function onDragLeave() {
+//   // Only clear if leaving the list entirely — handled by dragend
+// }
+
+function onDrop(e: DragEvent) {
+  e.preventDefault()
+  if (dragId.value === null || dropIndex.value === null) return
+  const layers = displayLayers.value
+  const fromDisplay = layers.findIndex((n) => n.id === dragId.value)
+  if (fromDisplay === -1) return
+
+  const n = layers.length
+  // Where the item actually lands in display space after removal
+  const effectiveTarget = dropIndex.value <= fromDisplay ? dropIndex.value : dropIndex.value - 1
+  if (effectiveTarget === fromDisplay) { dragId.value = null; dropIndex.value = null; return }
+
+  // Convert to store-space indices (display is reversed: display[d] = store[n-1-d])
+  const targetStore = n - 1 - effectiveTarget
+  const fromStore = n - 1 - fromDisplay
+  // moveNodeToIndex uses "final desired position in original array" semantics
+  const storeArg = targetStore < fromStore ? targetStore : targetStore + 1
+  schemaStore.moveNodeToIndex(dragId.value, storeArg)
+  dragId.value = null
+  dropIndex.value = null
+}
+
+function onDragEnd() {
+  dragId.value = null
+  dropIndex.value = null
 }
 
 // ── Connections tab ───────────────────────────────────────────────────────────
@@ -257,16 +301,18 @@ onMounted(async () => {
 
     <!-- ── Layers tab ─────────────────────────────────────────────────────── -->
     <div v-if="activeTab === 'layers'" class="sidebar-body">
-      <template v-for="group in groups" :key="group.kind">
-        <div v-if="group.nodes.length" class="group">
-          <div class="group-label">{{ group.label }}</div>
-          <button
-            v-for="node in group.nodes"
-            :key="node.id"
-            class="node-item"
-            :class="{ selected: selectedIds.has(node.id) }"
+      <div class="layers-list" @dragover.prevent @drop="onDrop" @dragend="onDragEnd">
+        <div v-if="dropIndex === 0 && dragId !== null" class="drop-indicator" />
+        <template v-for="(node, i) in displayLayers" :key="node.id">
+          <div
+            class="layer-item"
+            :class="{ selected: selectedIds.has(node.id), dragging: dragId === node.id }"
+            draggable="true"
+            @dragstart="onDragStart($event, node.id)"
+            @dragover="onDragOver($event, i)"
             @click="onItemClick($event, node)"
           >
+            <span class="drag-handle">⠿</span>
             <svg v-if="node.kind === 'table'" class="node-icon" viewBox="0 0 14 14" fill="none">
               <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
               <line x1="1" y1="4.5" x2="13" y2="4.5" stroke="currentColor" stroke-width="1.2"/>
@@ -280,15 +326,23 @@ onMounted(async () => {
               <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
               <polyline points="3,9 5,5 8,7 11,3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
+            <svg v-else-if="node.kind === 'section'" class="node-icon" viewBox="0 0 14 14" fill="none">
+              <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+            </svg>
             <svg v-else class="node-icon" viewBox="0 0 14 14" fill="none">
               <rect x="1" y="2" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
               <line x1="3.5" y1="5.5" x2="10.5" y2="5.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
               <line x1="3.5" y1="8" x2="7.5" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
             </svg>
             <span class="node-name">{{ node.name }}</span>
-          </button>
-        </div>
-      </template>
+            <div class="layer-actions">
+              <button class="layer-act-btn" title="Bring to front" @click.stop="schemaStore.bringToFront(node.id)">↑</button>
+              <button class="layer-act-btn" title="Send to back" @click.stop="schemaStore.sendToBack(node.id)">↓</button>
+            </div>
+          </div>
+          <div v-if="dropIndex === i + 1 && dragId !== null" class="drop-indicator" />
+        </template>
+      </div>
       <div v-if="!schemaStore.nodes.length" class="empty-hint">No nodes on canvas</div>
     </div>
 
@@ -434,27 +488,52 @@ onMounted(async () => {
 }
 
 /* ── Layers ── */
-.group { margin-bottom: 4px; }
-.group-label {
-  padding: 4px 12px 2px;
-  font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
-  text-transform: uppercase; color: var(--text-muted); opacity: 0.6;
-}
-.node-item {
-  display: flex; align-items: center; gap: 7px;
-  width: 100%; padding: 4px 12px;
+.layers-list { padding: 4px 0; }
+
+.layer-item {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 4px 8px 4px 4px;
   font-size: 12px; color: var(--text-secondary);
   background: transparent; border: none; border-radius: 0;
   text-align: left; cursor: pointer;
   transition: color 0.1s, background 0.1s; user-select: none;
+  position: relative;
 }
-.node-item:hover { color: var(--text-primary); background: var(--surface-2); }
-.node-item.selected { color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+.layer-item:hover { color: var(--text-primary); background: var(--surface-2); }
+.layer-item.selected { color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+.layer-item.dragging { opacity: 0.4; }
+
+.drag-handle {
+  font-size: 11px; color: var(--text-muted); opacity: 0;
+  cursor: grab; flex-shrink: 0; padding: 0 2px; line-height: 1;
+  transition: opacity 0.1s;
+}
+.layer-item:hover .drag-handle { opacity: 0.5; }
+.layer-item:active .drag-handle { cursor: grabbing; }
+
 .node-icon { width: 13px; height: 13px; flex-shrink: 0; opacity: 0.7; }
-.node-item.selected .node-icon { opacity: 1; }
+.layer-item.selected .node-icon { opacity: 1; }
 .node-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: var(--font-mono); font-size: 11.5px;
+  font-family: var(--font-mono); font-size: 11.5px; flex: 1; min-width: 0;
+}
+
+.layer-actions {
+  display: none; gap: 2px; flex-shrink: 0;
+}
+.layer-item:hover .layer-actions { display: flex; }
+.layer-act-btn {
+  padding: 1px 4px; border-radius: 3px; font-size: 10px; line-height: 1.4;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+}
+.layer-act-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+.drop-indicator {
+  height: 2px; margin: 0 6px;
+  background: var(--accent); border-radius: 1px;
+  pointer-events: none;
 }
 
 /* ── Connections: add button ── */
