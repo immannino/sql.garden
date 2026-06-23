@@ -8,6 +8,10 @@ export function AutoConnectAll():Promise<Array<main.AutoConnectResult>>;
 
 export function CheckForUpdate():Promise<main.UpdateInfo>;
 
+export function ClipboardGet():Promise<string>;
+
+export function ClipboardSet(arg1:string):Promise<void>;
+
 export function ConnectSaved(arg1:string):Promise<string>;
 
 export function CopyTableToParquet(arg1:string):Promise<string>;

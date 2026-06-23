@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useDuckDB, type QueryResult } from '../composables/useDuckDB'
+import { classifyColumnType } from '../lib/columnType'
 import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
@@ -277,7 +278,13 @@ defineExpose({ refreshStats })
             <table class="results-table">
               <thead>
                 <tr>
-                  <th v-for="col in result.columns" :key="col">{{ col }}</th>
+                  <th v-for="(col, i) in result.columns" :key="col">
+                    <span class="col-name">{{ col }}</span>
+                    <span
+                      class="col-type-badge"
+                      :class="`type-${classifyColumnType(result.columnTypes?.[i]).category}`"
+                    >{{ classifyColumnType(result.columnTypes?.[i]).label }}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -616,6 +623,25 @@ defineExpose({ refreshStats })
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
+
+.results-table thead th .col-name { margin-right: 4px; }
+
+.col-type-badge {
+  display: inline-block;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 3px;
+  border-radius: 3px;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+.type-int   { background: #1e3a5f; color: #7eb8f7; }
+.type-float { background: #1e3a40; color: #6dd5c8; }
+.type-text  { background: #2d2d1e; color: #d4c97a; }
+.type-bool  { background: #2a1e3a; color: #c084f5; }
+.type-date  { background: #1e3a28; color: #6dcc8a; }
+.type-other { background: var(--surface-1); color: var(--text-muted); }
 
 .results-table tbody tr:hover {
   background: var(--surface-1);

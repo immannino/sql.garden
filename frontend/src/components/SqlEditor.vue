@@ -4,6 +4,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { EditorState, Prec, Compartment } from '@codemirror/state'
 import { basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
+import { IS_DESKTOP } from '../lib/env'
 
 const props = defineProps<{
   modelValue: string
@@ -98,6 +99,66 @@ const theme = EditorView.theme({
   '.tok-function(.tok-variableName)': { color: '#d2a8ff' },
 }, { dark: true })
 
+// ── Clipboard helpers ─────────────────────────────────────────────────────────
+// Wails v2 on macOS does not wire clipboard shortcuts through the WKWebView
+// responder chain without a native Edit menu that has real action selectors.
+// We handle it explicitly: Go runtime on desktop, Web Clipboard API on web.
+
+async function clipboardRead(): Promise<string> {
+  if (IS_DESKTOP) {
+    const { ClipboardGet } = await import('../../wailsjs/go/main/App')
+    return ClipboardGet()
+  }
+  return navigator.clipboard.readText().catch(() => '')
+}
+
+async function clipboardWrite(text: string): Promise<void> {
+  if (IS_DESKTOP) {
+    const { ClipboardSet } = await import('../../wailsjs/go/main/App')
+    ClipboardSet(text)
+  } else {
+    navigator.clipboard.writeText(text).catch(() => {})
+  }
+}
+
+const clipboardKeymap = Prec.highest(keymap.of([
+  {
+    key: 'Mod-c',
+    run(view) {
+      const { from, to } = view.state.selection.main
+      const text = view.state.sliceDoc(from, to)
+      if (text) clipboardWrite(text)
+      return true
+    },
+  },
+  {
+    key: 'Mod-x',
+    run(view) {
+      const { from, to } = view.state.selection.main
+      const text = view.state.sliceDoc(from, to)
+      if (text) {
+        clipboardWrite(text)
+        view.dispatch({ changes: { from, to, insert: '' } })
+      }
+      return true
+    },
+  },
+  {
+    key: 'Mod-v',
+    run(view) {
+      clipboardRead().then((text) => {
+        if (!text) return
+        const { from, to } = view.state.selection.main
+        view.dispatch({
+          changes: { from, to, insert: text },
+          selection: { anchor: from + text.length },
+        })
+      })
+      return true
+    },
+  },
+]))
+
 // Prec.highest so our Mod-Enter overrides defaultKeymap's insertBlankLine binding
 const runKeymap = Prec.highest(keymap.of([
   {
@@ -113,6 +174,7 @@ function createView(parent: HTMLElement) {
       basicSetup,
       sqlCompartment.of(makeSqlExt(props.schema)),
       theme,
+      clipboardKeymap,
       runKeymap,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {

@@ -3,6 +3,10 @@ import { ref, nextTick, watch, computed, watchEffect, onMounted, onUnmounted } f
 import * as Plot from '@observablehq/plot'
 import type { ChartNode, TableColumnConfig } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
+import NodeColorPicker from './NodeColorPicker.vue'
+import { useContextMenu } from '../composables/useContextMenu'
+
+const { openNodeMenu } = useContextMenu()
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
 import { useChartResults } from '../composables/useChartResults'
@@ -129,7 +133,7 @@ async function runLinked() {
   setResult(sid, { columns: [], rows: [], error: null, isRunning: true })
   try {
     const result = await query(sql)
-    setResult(sid, { columns: result.columns, rows: result.rows, error: null, isRunning: false })
+    setResult(sid, { columns: result.columns, columnTypes: result.columnTypes, rows: result.rows, error: null, isRunning: false })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     setResult(sid, { columns: [], rows: [], error: msg, isRunning: false })
@@ -486,6 +490,7 @@ onUnmounted(() => {
     :class="{ selected }"
     :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 340}px` }"
     @mousedown="onMouseDown"
+    @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
   >
     <!-- Header -->
     <div class="card-header" :style="{ background: node.color }">
@@ -535,6 +540,8 @@ onUnmounted(() => {
           <polyline points="2,6.5 3.8,4.5 5.5,5.8 7.5,3" stroke="white" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
+
+      <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
 
       <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
         <svg viewBox="0 0 10 10" fill="none">
@@ -711,6 +718,7 @@ onUnmounted(() => {
   color: white;
   letter-spacing: 0.02em;
 }
+.card-header:hover :deep(.ncp-trigger) { opacity: 0.7; }
 .card-icon { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.9; }
 .card-name {
   flex: 1;

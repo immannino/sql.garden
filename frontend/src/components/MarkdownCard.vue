@@ -3,6 +3,10 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { marked } from 'marked'
 import type { MarkdownNode } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
+import NodeColorPicker from './NodeColorPicker.vue'
+import { useContextMenu } from '../composables/useContextMenu'
+
+const { openNodeMenu } = useContextMenu()
 
 const props = defineProps<{ node: MarkdownNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -106,6 +110,7 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
     :class="{ selected, editing: isEditing }"
     :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 300}px` }"
     @mousedown="onMouseDown"
+    @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
   >
     <!-- Header -->
     <div class="card-header" :style="{ background: node.color }">
@@ -127,6 +132,8 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
       <span v-else class="card-name" title="Double-click to rename" @mousedown.stop @dblclick="startRename">
         {{ node.name }}
       </span>
+
+      <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
 
       <button
         class="icon-btn"
@@ -235,6 +242,8 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
   color: white;
   letter-spacing: 0.02em;
 }
+
+.card-header:hover :deep(.ncp-trigger) { opacity: 0.7; }
 
 .card-icon { width: 13px; height: 13px; flex-shrink: 0; opacity: 0.9; }
 

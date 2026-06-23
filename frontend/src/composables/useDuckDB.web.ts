@@ -47,12 +47,13 @@ export async function wasmQuery(sql: string): Promise<QueryResult> {
   try {
     const table = await conn.query(sql)
     const columns = table.schema.fields.map((f) => f.name)
+    const columnTypes = table.schema.fields.map((f) => f.type.toString())
     const rows: Record<string, unknown>[] = table.toArray().map((row) => {
       const obj: Record<string, unknown> = {}
       for (const col of columns) obj[col] = coerce(row[col])
       return obj
     })
-    return { columns, rows, rowCount: rows.length, durationMs: performance.now() - t0 }
+    return { columns, columnTypes, rows, rowCount: rows.length, durationMs: performance.now() - t0 }
   } finally {
     await conn.close()
   }

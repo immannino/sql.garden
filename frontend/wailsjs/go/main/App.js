@@ -14,6 +14,14 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function ClipboardGet() {
+  return window['go']['main']['App']['ClipboardGet']();
+}
+
+export function ClipboardSet(arg1) {
+  return window['go']['main']['App']['ClipboardSet'](arg1);
+}
+
 export function ConnectSaved(arg1) {
   return window['go']['main']['App']['ConnectSaved'](arg1);
 }

@@ -84,6 +84,19 @@ func (a *App) buildMenu() *menu.Menu {
 	file.AddSeparator()
 	file.AddText("Import…", keys.CmdOrCtrl("i"), a.emit("menu:import"))
 
+	// ── Edit ─────────────────────────────────────────────────────────────────
+	// nil callbacks let macOS route these through the WKWebView responder chain
+	// so standard clipboard shortcuts work inside text fields and code editors.
+	edit := m.AddSubmenu("Edit")
+	edit.AddText("Undo", keys.CmdOrCtrl("z"), nil)
+	edit.AddText("Redo", keys.Combo("z", keys.CmdOrCtrlKey, keys.ShiftKey), nil)
+	edit.AddSeparator()
+	edit.AddText("Cut", keys.CmdOrCtrl("x"), nil)
+	edit.AddText("Copy", keys.CmdOrCtrl("c"), nil)
+	edit.AddText("Paste", keys.CmdOrCtrl("v"), nil)
+	edit.AddSeparator()
+	edit.AddText("Select All", keys.CmdOrCtrl("a"), nil)
+
 	// ── View ──────────────────────────────────────────────────────────────────
 	view := m.AddSubmenu("View")
 	view.AddText("Fit View", keys.Combo("f", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:fit-view"))
@@ -626,10 +639,11 @@ func (a *App) DeleteTableData(tableName string) error {
 // ── Types shared with the frontend ───────────────────────────────────────────
 
 type QueryResult struct {
-	Columns    []string         `json:"columns"`
-	Rows       []map[string]any `json:"rows"`
-	RowCount   int              `json:"rowCount"`
-	DurationMs float64          `json:"durationMs"`
+	Columns     []string         `json:"columns"`
+	ColumnTypes []string         `json:"columnTypes"`
+	Rows        []map[string]any `json:"rows"`
+	RowCount    int              `json:"rowCount"`
+	DurationMs  float64          `json:"durationMs"`
 }
 
 type ColumnInfo struct {
@@ -675,12 +689,30 @@ func (a *App) Query(query string) (QueryResult, error) {
 		return QueryResult{}, err
 	}
 
+	colTypes, _ := rows.ColumnTypes()
+	typeNames := make([]string, len(colTypes))
+	for i, ct := range colTypes {
+		typeNames[i] = ct.DatabaseTypeName()
+	}
+
 	return QueryResult{
-		Columns:    cols,
-		Rows:       result,
-		RowCount:   len(result),
-		DurationMs: float64(time.Since(start).Microseconds()) / 1000,
+		Columns:     cols,
+		ColumnTypes: typeNames,
+		Rows:        result,
+		RowCount:    len(result),
+		DurationMs:  float64(time.Since(start).Microseconds()) / 1000,
 	}, nil
+}
+
+// ClipboardGet returns the current clipboard text content.
+func (a *App) ClipboardGet() string {
+	text, _ := runtime.ClipboardGetText(a.ctx)
+	return text
+}
+
+// ClipboardSet writes text to the system clipboard.
+func (a *App) ClipboardSet(text string) {
+	_ = runtime.ClipboardSetText(a.ctx, text)
 }
 
 // Exec runs a statement that returns no rows (CREATE, INSERT, DROP, etc.).

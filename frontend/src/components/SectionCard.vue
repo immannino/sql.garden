@@ -2,6 +2,10 @@
 import { ref, nextTick } from 'vue'
 import type { SectionNode } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
+import NodeColorPicker from './NodeColorPicker.vue'
+import { useContextMenu } from '../composables/useContextMenu'
+
+const { openNodeMenu } = useContextMenu()
 
 const props = defineProps<{ node: SectionNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -65,6 +69,7 @@ function onRenameKey(e: KeyboardEvent) {
   <div
     class="section-card"
     :class="{ selected }"
+    @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
     :style="{
       left: `${node.x}px`,
       top: `${node.y}px`,
@@ -91,6 +96,8 @@ function onRenameKey(e: KeyboardEvent) {
         title="Double-click to rename"
         @dblclick="startRename"
       >{{ node.name }}</span>
+
+      <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
 
       <button
         class="section-delete-btn"
@@ -153,6 +160,8 @@ function onRenameKey(e: KeyboardEvent) {
   padding: 0 8px 0 10px;
   cursor: default;
 }
+
+.section-label-bar:hover :deep(.ncp-trigger) { opacity: 0.7; }
 
 .section-label {
   font-size: 11px;

@@ -8,6 +8,11 @@ import { useAppReady } from '../composables/useAppReady'
 import { exportData, type ExportFormat } from '../lib/exportData'
 import SqlEditor from './SqlEditor.vue'
 import { useSchemaCompletions } from '../composables/useSchemaCompletions'
+import NodeColorPicker from './NodeColorPicker.vue'
+import { classifyColumnType } from '../lib/columnType'
+import { useContextMenu } from '../composables/useContextMenu'
+
+const { openNodeMenu } = useContextMenu()
 
 const props = defineProps<{ node: QueryNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -228,7 +233,7 @@ async function run(e?: MouseEvent) {
   try {
     const result = await query(sql)
     runSummary.value = `${result.rowCount.toLocaleString()} ${result.rowCount === 1 ? 'row' : 'rows'}, ${result.columns.length} cols`
-    setResult(props.node.id, { columns: result.columns, rows: result.rows, error: null, isRunning: false })
+    setResult(props.node.id, { columns: result.columns, columnTypes: result.columnTypes, rows: result.rows, error: null, isRunning: false })
     activeTab.value = 'results'
   } catch (err) {
     runError.value = err instanceof Error ? err.message : String(err)
@@ -280,6 +285,7 @@ onUnmounted(() => {
     :class="{ selected }"
     :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 280}px` }"
     @mousedown="onMouseDown"
+    @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
   >
     <!-- Header -->
     <div class="card-header" :style="{ background: node.color }">
@@ -302,6 +308,8 @@ onUnmounted(() => {
       <span v-else class="card-name" title="Double-click to rename" @mousedown.stop @dblclick="startRename">
         {{ node.name }}
       </span>
+
+      <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
 
       <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
         <svg viewBox="0 0 10 10" fill="none">
@@ -373,7 +381,15 @@ onUnmounted(() => {
         <div class="results-scroll">
           <table class="mini-table">
             <thead>
-              <tr><th v-for="col in nodeResult.columns" :key="col">{{ col }}</th></tr>
+              <tr>
+                <th v-for="(col, i) in nodeResult.columns" :key="col">
+                  <span class="col-name">{{ col }}</span>
+                  <span
+                    class="col-type-badge"
+                    :class="`type-${classifyColumnType(nodeResult.columnTypes?.[i]).category}`"
+                  >{{ classifyColumnType(nodeResult.columnTypes?.[i]).label }}</span>
+                </th>
+              </tr>
             </thead>
             <tbody>
               <tr v-for="(row, i) in displayRows" :key="i">
@@ -500,6 +516,8 @@ onUnmounted(() => {
   color: white;
   letter-spacing: 0.02em;
 }
+
+.card-header:hover :deep(.ncp-trigger) { opacity: 0.7; }
 
 .card-icon {
   width: 13px;
@@ -682,6 +700,25 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
+
+.mini-table thead th .col-name { margin-right: 4px; }
+
+.col-type-badge {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 3px;
+  border-radius: 3px;
+  vertical-align: middle;
+  opacity: 0.85;
+}
+.type-int   { background: #1e3a5f; color: #7eb8f7; }
+.type-float { background: #1e3a40; color: #6dd5c8; }
+.type-text  { background: #2d2d1e; color: #d4c97a; }
+.type-bool  { background: #2a1e3a; color: #c084f5; }
+.type-date  { background: #1e3a28; color: #6dcc8a; }
+.type-other { background: var(--surface-1); color: var(--text-muted); }
 
 .mini-table tbody tr:hover td { background: var(--surface-1); }
 

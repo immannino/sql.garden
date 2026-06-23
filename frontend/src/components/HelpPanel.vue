@@ -19,11 +19,13 @@ const SHORTCUT_SECTIONS = [
       { keys: ['N'], label: 'Add Markdown note' },
       { keys: ['S'], label: 'Add Section' },
       { keys: ['I'], label: 'Open Import' },
+      { keys: ['⌘', 'D'], label: 'Duplicate selected node(s)' },
     ],
   },
   {
     title: 'Canvas',
     rows: [
+      { keys: ['⌘', 'K'], label: 'Search & jump to node' },
       { keys: ['F'], label: 'Fit all nodes in view' },
       { keys: ['⌘', '='], label: 'Zoom in' },
       { keys: ['⌘', '−'], label: 'Zoom out' },

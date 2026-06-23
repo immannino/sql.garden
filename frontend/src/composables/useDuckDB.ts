@@ -17,6 +17,7 @@ async function getWebImpl() {
 
 export interface QueryResult {
   columns: string[]
+  columnTypes?: string[]
   rows: Record<string, unknown>[]
   rowCount: number
   durationMs: number

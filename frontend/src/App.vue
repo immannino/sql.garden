@@ -8,6 +8,10 @@ import SettingsModal from './components/SettingsModal.vue'
 import DatasetPickerModal from './components/DatasetPickerModal.vue'
 import ChartPropertiesPanel from './components/ChartPropertiesPanel.vue'
 import HelpPanel from './components/HelpPanel.vue'
+import SearchPalette from './components/SearchPalette.vue'
+import ContextMenu from './components/ContextMenu.vue'
+import { useContextMenu } from './composables/useContextMenu'
+import type { MenuSection } from './components/ContextMenu.vue'
 import { useDuckDB } from './composables/useDuckDB'
 import { useSchemaStore } from './stores/schema'
 import { usePersistence } from './composables/usePersistence'
@@ -17,6 +21,7 @@ import { useChartPanel } from './composables/useChartPanel'
 import { useQueryResults } from './composables/useQueryResults'
 import { useChartResults } from './composables/useChartResults'
 import { exportData, type ExportFormat } from './lib/exportData'
+import { useSelection } from './composables/useSelection'
 import { IS_DESKTOP } from './lib/env'
 import type { main } from '../wailsjs/go/models'
 
@@ -25,9 +30,12 @@ const schemaStore = useSchemaStore()
 const { loadAll, startAutoSave } = usePersistence()
 const { markAppReady } = useAppReady()
 const { loadTheme } = useTheme()
+const { selectedIds } = useSelection()
+const { contextMenu, close: closeContextMenu } = useContextMenu()
 const { openPanel } = useChartPanel()
 const { results: queryResults } = useQueryResults()
 const { chartResults } = useChartResults()
+const showPalette = ref(false)
 const showSettings = ref(false)
 const settingsInitialTab = ref<'appearance' | 'mcp' | 'updates' | undefined>(undefined)
 const showDatasetPicker = ref(false)
@@ -51,6 +59,7 @@ An infinite canvas SQL workspace powered by **DuckDB WebAssembly** — everythin
 | Add a chart | Press \`C\` |
 | Add a note | Press \`N\` |
 | Fit canvas to view | Press \`F\` |
+| Jump to any node | Press \`⌘K\` |
 
 Press **\`?\`** anytime to see all keyboard shortcuts.
 
@@ -217,6 +226,66 @@ function handleFileDrop(_x: number, _y: number, paths: string[]) {
 }
 
 function onFocusNode(id: string) {
+  canvasRef.value?.focusNode(id)
+}
+
+function onPaletteSelect(id: string) {
+  canvasRef.value?.focusNode(id)
+}
+
+function contextMenuSections(): MenuSection[] {
+  const cm = contextMenu.value
+  if (!cm) return []
+
+  if (cm.type === 'canvas') {
+    return [
+      { label: 'Add Query node',    shortcut: 'Q', action: () => { if (isReady.value) addQueryNode() } },
+      { label: 'Add Chart node',    shortcut: 'C', action: () => { if (isReady.value) addChartNode() } },
+      { label: 'Add Markdown note', shortcut: 'N', action: addMarkdownNode },
+      { label: 'Add Section',       shortcut: 'S', action: addSection },
+      { divider: true },
+      { label: 'Fit View', shortcut: 'F', action: () => canvasRef.value?.fitView() },
+    ]
+  }
+
+  // node menu
+  const { id } = cm
+  const node = schemaStore.nodes.find((n) => n.id === id)
+  if (!node) return []
+
+  return [
+    {
+      label: 'Duplicate',
+      shortcut: '⌘D',
+      action: () => {
+        const newId = schemaStore.duplicateNode(id)
+        if (newId) { selectedIds.value = new Set([newId]); canvasRef.value?.focusNode(newId) }
+      },
+    },
+    { divider: true },
+    { label: 'Bring to Front', action: () => schemaStore.bringToFront(id) },
+    { label: 'Send to Back',   action: () => schemaStore.sendToBack(id) },
+    { divider: true },
+    {
+      label: 'Delete',
+      danger: true,
+      action: () => {
+        schemaStore.removeNode(id)
+        selectedIds.value = new Set()
+      },
+    },
+  ]
+}
+
+function onCreateQueryFromConnection(payload: { name: string; sql: string }) {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const baseName = payload.name
+  const names = new Set(schemaStore.nodes.map((n) => n.name))
+  let name = baseName
+  let i = 2
+  while (names.has(name)) name = `${baseName}_${i++}`
+  const id = `query_${Date.now()}`
+  schemaStore.addQueryNode({ id, name, x: center.x - 140, y: center.y - 80, sql: payload.sql })
   canvasRef.value?.focusNode(id)
 }
 
@@ -511,7 +580,55 @@ async function onToolbarDblClick(e: MouseEvent) {
   WindowToggleMaximise()
 }
 
+// Clipboard shim for plain <input>/<textarea> elements in Wails on macOS.
+// CodeMirror editors handle their own clipboard via SqlEditor.vue keymaps.
+async function onDesktopClipboardKey(e: KeyboardEvent) {
+  if (!e.metaKey && !e.ctrlKey) return
+  const target = e.target as HTMLElement
+  const tag = target.tagName
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA') return
+  if (target.closest('.cm-editor')) return // CodeMirror handles its own
+
+  const el = target as HTMLInputElement | HTMLTextAreaElement
+  const { ClipboardGet, ClipboardSet } = await import('../wailsjs/go/main/App')
+
+  if (e.key === 'a') {
+    e.preventDefault()
+    el.select()
+  } else if (e.key === 'c') {
+    const text = el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? el.value.length)
+    if (text) { e.preventDefault(); ClipboardSet(text) }
+  } else if (e.key === 'x') {
+    const start = el.selectionStart ?? 0
+    const end = el.selectionEnd ?? el.value.length
+    const text = el.value.slice(start, end)
+    if (text) {
+      e.preventDefault()
+      ClipboardSet(text)
+      el.setRangeText('', start, end, 'end')
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  } else if (e.key === 'v') {
+    e.preventDefault()
+    const text = await ClipboardGet()
+    if (text) {
+      const start = el.selectionStart ?? el.value.length
+      const end = el.selectionEnd ?? el.value.length
+      el.setRangeText(text, start, end, 'end')
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  }
+}
+
 function onGlobalKey(e: KeyboardEvent) {
+  // Cmd+K opens the search palette from anywhere — check before the input guard
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault()
+    closeContextMenu()
+    showPalette.value = !showPalette.value
+    return
+  }
+
   // Never intercept when focus is in a text field or code editor
   const target = e.target as HTMLElement
   const tag = target.tagName
@@ -524,6 +641,17 @@ function onGlobalKey(e: KeyboardEvent) {
     if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
     if (e.key === '-') { e.preventDefault(); canvasRef.value?.zoomOut() }
     if (e.key === '0') { e.preventDefault(); canvasRef.value?.fitView() }
+    if (e.key === 'd') {
+      const ids = [...selectedIds.value]
+      if (ids.length) {
+        e.preventDefault()
+        const newIds = ids.map((id) => schemaStore.duplicateNode(id)).filter(Boolean) as string[]
+        if (newIds.length) {
+          selectedIds.value = new Set(newIds)
+          if (newIds.length === 1) canvasRef.value?.focusNode(newIds[0])
+        }
+      }
+    }
     return
   }
   if (e.altKey) return
@@ -561,6 +689,11 @@ onMounted(async () => {
     EventsOn('menu:shortcuts',      () => { showHelp.value = !showHelp.value })
   }
   window.addEventListener('keydown', onGlobalKey)
+  // Wails macOS: native clipboard shortcuts don't reach the WKWebView without
+  // a properly wired Edit menu. Handle them manually for <input>/<textarea>.
+  if (IS_DESKTOP) {
+    window.addEventListener('keydown', onDesktopClipboardKey, true)
+  }
   // Startup update check — quiet, non-blocking
   if (IS_DESKTOP) {
     import('../wailsjs/go/main/App').then(({ CheckForUpdate }) =>
@@ -613,6 +746,7 @@ onUnmounted(async () => {
     mcpStream?.close()
   }
   window.removeEventListener('keydown', onGlobalKey)
+  if (IS_DESKTOP) window.removeEventListener('keydown', onDesktopClipboardKey, true)
 })
 </script>
 
@@ -784,7 +918,7 @@ onUnmounted(async () => {
         </button>
       </nav>
 
-      <Sidebar v-if="showSidebar" @focus-node="onFocusNode" />
+      <Sidebar v-if="showSidebar" @focus-node="onFocusNode" @create-query="onCreateQueryFromConnection" />
       <Canvas ref="canvasRef" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
 
@@ -823,6 +957,22 @@ onUnmounted(async () => {
         </button>
       </div>
     </div>
+
+    <!-- Cmd+K search palette -->
+    <SearchPalette
+      v-if="showPalette"
+      @close="showPalette = false"
+      @select="onPaletteSelect"
+    />
+
+    <!-- Right-click context menu -->
+    <ContextMenu
+      v-if="contextMenu"
+      :x="contextMenu.x"
+      :y="contextMenu.y"
+      :sections="contextMenuSections()"
+      @close="closeContextMenu"
+    />
 
     <!-- Settings modal -->
     <SettingsModal

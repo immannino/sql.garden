@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useContextMenu } from '../composables/useContextMenu'
 import TableCard from './TableCard.vue'
 import QueryCard from './QueryCard.vue'
 import ChartCard from './ChartCard.vue'
@@ -12,6 +13,7 @@ import { useTableOps } from '../composables/useTableOps'
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
+const { openCanvasMenu } = useContextMenu()
 const { dropTable } = useTableOps()
 
 const pan = ref({ x: 100, y: 60 })
@@ -338,6 +340,7 @@ onUnmounted(() => {
     :class="{ panning: isPanning, 'space-ready': spaceDown && !isPanning, 'resize-e': resizeDir === 'e', 'resize-s': resizeDir === 's', 'resize-se': resizeDir === 'se' }"
     @wheel.prevent="onWheel"
     @mousedown="onMouseDown"
+    @contextmenu.prevent="openCanvasMenu($event.clientX, $event.clientY)"
   >
     <div class="canvas-grid" />
 

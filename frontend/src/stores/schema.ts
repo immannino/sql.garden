@@ -248,6 +248,46 @@ export const useSchemaStore = defineStore('schema', () => {
     n.h = h
   }
 
+  function setNodeColor(id: string, color: string) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n) n.color = color
+  }
+
+  function duplicateNode(id: string): string | null {
+    const src = nodes.value.find((n) => n.id === id)
+    if (!src) return null
+
+    const existingNames = new Set(nodes.value.map((n) => n.name))
+    function uniqueName(base: string): string {
+      let candidate = `${base}_copy`
+      let i = 2
+      while (existingNames.has(candidate)) candidate = `${base}_copy${i++}`
+      return candidate
+    }
+
+    const newId = `${src.kind}_${Date.now()}`
+    const name = uniqueName(src.name)
+    const OFFSET = 24
+
+    let clone: CanvasNode
+    if (src.kind === 'table') {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET,
+        columns: src.columns.map((c) => ({ ...c })) }
+    } else if (src.kind === 'query') {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET, isView: false }
+    } else if (src.kind === 'chart') {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET,
+        conditions: src.conditions ? src.conditions.map((r) => ({ ...r })) : undefined }
+    } else if (src.kind === 'markdown') {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET }
+    } else {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET }
+    }
+
+    nodes.value.push(clone)
+    return newId
+  }
+
   function setColorCursor(n: number) {
     colorCursor = n
   }
@@ -263,6 +303,6 @@ export const useSchemaStore = defineStore('schema', () => {
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     moveNodeToIndex, bringToFront, sendToBack,
     setRowCount, updateQuerySql, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
-    setColorCursor, clear,
+    setNodeColor, duplicateNode, setColorCursor, clear,
   }
 })

@@ -264,6 +264,7 @@ export namespace main {
 	}
 	export class QueryResult {
 	    columns: string[];
+	    columnTypes: string[];
 	    rows: any[];
 	    rowCount: number;
 	    durationMs: number;
@@ -275,6 +276,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.columns = source["columns"];
+	        this.columnTypes = source["columnTypes"];
 	        this.rows = source["rows"];
 	        this.rowCount = source["rowCount"];
 	        this.durationMs = source["durationMs"];

@@ -17,7 +17,10 @@ import {
 } from '../../wailsjs/go/main/App'
 import type { main } from '../../wailsjs/go/models'
 
-const emit = defineEmits<{ focusNode: [id: string] }>()
+const emit = defineEmits<{
+  focusNode: [id: string]
+  createQuery: [{ name: string; sql: string }]
+}>()
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode } = useSelection()
@@ -272,6 +275,13 @@ async function toggleTable(connId: string, schemaName: string, table: ExplorerTa
   }
 }
 
+function createQueryFromTable(connId: string, schemaName: string, tableName: string) {
+  const alias = connectedAliases[connId]
+  const sql = `SELECT * FROM "${alias}"."${schemaName}"."${tableName}" LIMIT 1000`
+  const name = tableName
+  emit('createQuery', { name, sql })
+}
+
 onMounted(async () => {
   await loadConnections()
   try {
@@ -313,6 +323,7 @@ onMounted(async () => {
             @click="onItemClick($event, node)"
           >
             <span class="drag-handle">⠿</span>
+            <span class="layer-color-dot" :style="{ background: node.color }" />
             <svg v-if="node.kind === 'table'" class="node-icon" viewBox="0 0 14 14" fill="none">
               <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
               <line x1="1" y1="4.5" x2="13" y2="4.5" stroke="currentColor" stroke-width="1.2"/>
@@ -420,14 +431,21 @@ onMounted(async () => {
             <template v-if="schema.open && schema.tables">
               <template v-for="table in schema.tables" :key="table.name">
                 <!-- Table / view row -->
-                <button class="ex-table" @click="toggleTable(conn.id, schema.name, table)">
-                  <span class="ex-caret">{{ table.open ? '▾' : '▸' }}</span>
-                  <span class="ex-kind" :class="table.kind === 'view' ? 'ex-kind-view' : 'ex-kind-table'">
-                    {{ table.kind === 'view' ? 'V' : 'T' }}
-                  </span>
-                  <span class="ex-table-name">{{ table.name }}</span>
-                  <span v-if="table.loading" class="ex-spin">⋯</span>
-                </button>
+                <div class="ex-table-row">
+                  <button class="ex-table" @click="toggleTable(conn.id, schema.name, table)">
+                    <span class="ex-caret">{{ table.open ? '▾' : '▸' }}</span>
+                    <span class="ex-kind" :class="table.kind === 'view' ? 'ex-kind-view' : 'ex-kind-table'">
+                      {{ table.kind === 'view' ? 'V' : 'T' }}
+                    </span>
+                    <span class="ex-table-name">{{ table.name }}</span>
+                    <span v-if="table.loading" class="ex-spin">⋯</span>
+                  </button>
+                  <button
+                    class="ex-table-query-btn"
+                    title="Create query node for this table"
+                    @click.stop="createQueryFromTable(conn.id, schema.name, table.name)"
+                  >+</button>
+                </div>
                 <!-- Columns inside table -->
                 <template v-if="table.open && table.cols">
                   <div v-for="col in table.cols" :key="col.name" class="ex-col">
@@ -510,6 +528,13 @@ onMounted(async () => {
 }
 .layer-item:hover .drag-handle { opacity: 0.5; }
 .layer-item:active .drag-handle { cursor: grabbing; }
+
+.layer-color-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
 
 .node-icon { width: 13px; height: 13px; flex-shrink: 0; opacity: 0.7; }
 .layer-item.selected .node-icon { opacity: 1; }
@@ -656,14 +681,47 @@ onMounted(async () => {
 .ex-schema:hover { color: var(--text-primary); background: var(--surface-2); }
 .ex-schema-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
+.ex-table-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+.ex-table-row:hover .ex-table-query-btn { opacity: 1; }
+
 .ex-table {
   display: flex; align-items: center; gap: 4px;
-  width: 100%; padding: 2px 8px 2px 18px;
+  flex: 1; padding: 2px 8px 2px 18px;
   font-size: 10.5px; color: var(--text-secondary);
   background: transparent; border: none; text-align: left; cursor: pointer;
   transition: color 0.1s, background 0.1s;
+  min-width: 0;
 }
 .ex-table:hover { color: var(--text-primary); background: var(--surface-2); }
+
+.ex-table-query-btn {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s, border-color 0.1s;
+}
+.ex-table-query-btn:hover {
+  color: var(--accent);
+  background: rgba(88, 166, 255, 0.1);
+  border-color: rgba(88, 166, 255, 0.3);
+}
+
 .ex-table-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
   font-family: var(--font-mono);

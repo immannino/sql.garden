@@ -2,6 +2,7 @@ import { reactive, markRaw } from 'vue'
 
 export interface NodeQueryResult {
   columns: string[]
+  columnTypes?: string[]
   rows: Record<string, unknown>[]
   error: string | null
   isRunning: boolean

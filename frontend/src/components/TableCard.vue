@@ -4,6 +4,10 @@ import type { TableNode } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
 import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
+import NodeColorPicker from './NodeColorPicker.vue'
+import { useContextMenu } from '../composables/useContextMenu'
+
+const { openNodeMenu } = useContextMenu()
 
 const props = defineProps<{ table: TableNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -59,7 +63,8 @@ function onRenameKeydown(e: KeyboardEvent) {
 }
 
 // ── View mode ─────────────────────────────────────────────────────────────────
-const { updateViewMode } = useSchemaStore()
+const schemaStore = useSchemaStore()
+const { updateViewMode } = schemaStore
 const isCollapsed = computed(() => props.table.viewMode === 'collapsed')
 function toggleCollapsed(e: MouseEvent) {
   e.stopPropagation()
@@ -123,6 +128,7 @@ function typeColor(type: string) {
     :class="{ selected, 'has-h': !!table.h }"
     :style="{ left: `${table.x}px`, top: `${table.y}px`, width: `${table.w ?? 240}px`, ...(table.h ? { height: `${table.h}px` } : {}) }"
     @mousedown="onMouseDown"
+    @contextmenu.prevent.stop="openNodeMenu(table.id, $event.clientX, $event.clientY)"
     @mouseleave="onCardMouseLeave"
   >
     <!-- Header -->
@@ -151,6 +157,8 @@ function typeColor(type: string) {
       >{{ table.name }}</span>
 
       <span class="card-count">{{ table.columns.length }}</span>
+
+      <NodeColorPicker :color="table.color" @pick="schemaStore.setNodeColor(table.id, $event)" />
 
       <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
         <svg viewBox="0 0 10 10" fill="none">
@@ -274,6 +282,8 @@ function typeColor(type: string) {
   color: white;
   letter-spacing: 0.02em;
 }
+
+.card-header:hover :deep(.ncp-trigger) { opacity: 0.7; }
 
 .card-icon {
   width: 14px;
