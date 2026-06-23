@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, computed, onMounted, onUnmounted } from 'vue'
-import type { QueryNode } from '../stores/schema'
+import type { QueryNode, SqlHistoryEntry } from '../stores/schema'
 import { useSchemaStore } from '../stores/schema'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
@@ -35,7 +35,7 @@ function sqlDropView(name: string) {
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────────────────
-const activeTab = ref<'sql' | 'results'>('sql')
+const activeTab = ref<'sql' | 'results' | 'history'>('sql')
 const nodeResult = computed(() => queryResults[props.node.id] ?? null)
 const resultRowCount = computed(() => {
   const r = nodeResult.value
@@ -234,6 +234,7 @@ async function run(e?: MouseEvent) {
     const result = await query(sql)
     runSummary.value = `${result.rowCount.toLocaleString()} ${result.rowCount === 1 ? 'row' : 'rows'}, ${result.columns.length} cols`
     setResult(props.node.id, { columns: result.columns, columnTypes: result.columnTypes, rows: result.rows, error: null, isRunning: false })
+    schemaStore.pushQueryHistory(props.node.id, sql)
     activeTab.value = 'results'
   } catch (err) {
     runError.value = err instanceof Error ? err.message : String(err)
@@ -241,6 +242,31 @@ async function run(e?: MouseEvent) {
   } finally {
     isRunning.value = false
   }
+}
+
+// ── History ────────────────────────────────────────────────────────────────────
+const history = computed<SqlHistoryEntry[]>(() => props.node.sqlHistory ?? [])
+const _historyTick = ref(0)
+let _historyTimer: ReturnType<typeof setInterval> | null = null
+
+watch(() => activeTab.value === 'history', (open) => {
+  if (open && !_historyTimer) _historyTimer = setInterval(() => { _historyTick.value++ }, 30_000)
+  else if (!open && _historyTimer) { clearInterval(_historyTimer); _historyTimer = null }
+})
+
+function historyRelTime(ts: number): string {
+  _historyTick.value // reactive dependency for auto-refresh
+  const diff = Date.now() - ts
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`
+  return `${Math.round(diff / 86_400_000)}d ago`
+}
+
+function restoreHistory(entry: SqlHistoryEntry) {
+  localSql.value = entry.sql
+  schemaStore.updateQuerySql(props.node.id, entry.sql)
+  activeTab.value = 'sql'
 }
 
 
@@ -276,6 +302,7 @@ watch(() => props.node.refreshInterval, startTimer, { immediate: true })
 
 onUnmounted(() => {
   if (intervalTimer.value) clearInterval(intervalTimer.value)
+  if (_historyTimer) clearInterval(_historyTimer)
 })
 </script>
 
@@ -344,6 +371,10 @@ onUnmounted(() => {
         Results
         <span v-if="resultRowCount !== null" class="tab-badge">{{ resultRowCount.toLocaleString() }}</span>
       </button>
+      <button class="card-tab" :class="{ active: activeTab === 'history' }" @click.stop="activeTab = 'history'">
+        History
+        <span v-if="history.length" class="tab-badge">{{ history.length }}</span>
+      </button>
     </div>
 
     <!-- SQL editor -->
@@ -408,6 +439,20 @@ onUnmounted(() => {
       <div v-else-if="nodeResult?.error" class="results-state results-error">{{ nodeResult.error.split('\n')[0] }}</div>
       <div v-else-if="nodeResult && !nodeResult.rows.length" class="results-state">No rows returned</div>
       <div v-else class="results-state">Run to see results</div>
+    </div>
+
+    <!-- History -->
+    <div v-show="activeTab === 'history'" class="card-history" :style="{ height: `${node.h ?? 84}px` }" @mousedown.stop>
+      <div v-if="!history.length" class="history-empty">No history yet — run a query to start tracking</div>
+      <div v-else class="history-list">
+        <div v-for="(entry, i) in history" :key="i" class="history-entry" @click.stop="restoreHistory(entry)">
+          <div class="history-meta">
+            <span class="history-time">{{ historyRelTime(entry.ts) }}</span>
+            <button class="history-restore" title="Restore this query" @click.stop="restoreHistory(entry)">Restore</button>
+          </div>
+          <pre class="history-sql">{{ entry.sql.length > 200 ? entry.sql.slice(0, 200) + '…' : entry.sql }}</pre>
+        </div>
+      </div>
     </div>
 
     <!-- View error -->
@@ -983,6 +1028,85 @@ onUnmounted(() => {
 .spin { animation: spin 0.8s linear infinite; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── History tab ─────────────────────────────────────────────────────────── */
+.card-history {
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
+  display: flex;
+  flex-direction: column;
+}
+
+.history-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 12px;
+  text-align: center;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.history-entry {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.history-entry:last-child { border-bottom: none; }
+.history-entry:hover { background: var(--surface-1); }
+.history-entry:hover .history-restore { opacity: 1; }
+
+.history-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.history-time {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.history-restore {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  background: rgba(88, 166, 255, 0.1);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 3px;
+  color: var(--accent);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s;
+}
+
+.history-restore:hover { background: rgba(88, 166, 255, 0.2); }
+
+.history-sql {
+  margin: 0;
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.45;
+  max-height: 60px;
+  overflow: hidden;
+}
 
 /* ── Resize handles ──────────────────────────────────────────────────────── */
 .rh-e, .rh-s, .rh-se { position: absolute; opacity: 0; transition: opacity 0.15s; }

@@ -28,30 +28,56 @@ watch(node, (n) => { if (!n) closePanel() })
 
 // ── Chart type info ───────────────────────────────────────────────────────────
 const CHART_TYPES = [
-  { value: 'barY',        label: 'Bar Y',   icon: '▮' },
-  { value: 'barX',        label: 'Bar X',   icon: '▬' },
-  { value: 'lineY',       label: 'Line',    icon: '╱' },
-  { value: 'areaY',       label: 'Area',    icon: '◭' },
-  { value: 'dot',         label: 'Scatter', icon: '●' },
-  { value: 'cell',        label: 'Cell',    icon: '▦' },
-  { value: 'pie',         label: 'Pie',     icon: '◔' },
-  { value: 'donut',       label: 'Donut',   icon: '◎' },
-  { value: 'number',      label: 'Number',  icon: '#' },
-  { value: 'boolean',     label: 'Badge',   icon: '◉' },
-  { value: 'conditional', label: 'Status',  icon: '◈' },
-  { value: 'mermaid',     label: 'Mermaid', icon: '⬡' },
-  { value: 'table',       label: 'Table',   icon: '⊞' },
+  { value: 'barY',        label: 'Bar Y',     icon: '▮' },
+  { value: 'barX',        label: 'Bar X',     icon: '▬' },
+  { value: 'lineY',       label: 'Line',      icon: '╱' },
+  { value: 'areaY',       label: 'Area',      icon: '◭' },
+  { value: 'dot',         label: 'Scatter',   icon: '●' },
+  { value: 'cell',        label: 'Cell',      icon: '▦' },
+  { value: 'pie',         label: 'Pie',       icon: '◔' },
+  { value: 'donut',       label: 'Donut',     icon: '◎' },
+  { value: 'histogram',   label: 'Histogram', icon: '▆' },
+  { value: 'boxplot',     label: 'Box Plot',  icon: '⊟' },
+  { value: 'sankey',      label: 'Sankey',    icon: '↔' },
+  { value: 'number',      label: 'Number',    icon: '#' },
+  { value: 'boolean',     label: 'Badge',     icon: '◉' },
+  { value: 'conditional', label: 'Status',    icon: '◈' },
+  { value: 'mermaid',     label: 'Mermaid',   icon: '⬡' },
+  { value: 'table',       label: 'Table',     icon: '⊞' },
 ] as const
 
 type ChartTypeValue = typeof CHART_TYPES[number]['value']
 
-const isPlotType    = computed(() => node.value && !['number', 'boolean', 'conditional', 'mermaid', 'table'].includes(node.value.chartType))
-const isPieType     = computed(() => node.value?.chartType === 'pie' || node.value?.chartType === 'donut')
-const isStatType    = computed(() => node.value?.chartType === 'number')
-const isBoolType    = computed(() => node.value?.chartType === 'boolean')
-const isCondType    = computed(() => node.value?.chartType === 'conditional')
-const isMermaidType = computed(() => node.value?.chartType === 'mermaid')
-const isTableType   = computed(() => node.value?.chartType === 'table')
+const CHART_HELP: Record<string, { when: string; columns: string; tip?: string }> = {
+  barY:        { when: 'Compare values across categories or time', columns: 'X: category or time · Y: numeric value', tip: 'Sort X with ORDER BY for cleaner bars' },
+  barX:        { when: 'Horizontal bars — great for long category names', columns: 'X: numeric value · Y: category' },
+  lineY:       { when: 'Show trends over continuous X (time, index)', columns: 'X: time or sequential · Y: numeric value', tip: 'Add a Color column to plot multiple series' },
+  areaY:       { when: 'Like Line but filled — good for cumulative or volume data', columns: 'X: time or sequential · Y: numeric value' },
+  dot:         { when: 'Correlations between two numeric columns', columns: 'X: numeric · Y: numeric', tip: 'Color groups points; Label annotates them' },
+  cell:        { when: 'Color-encoded grid across two categorical axes (heatmap)', columns: 'X: category · Y: category · Color: numeric intensity' },
+  pie:         { when: 'Part-to-whole for a small number of categories', columns: 'Label: category · Value: numeric', tip: 'Best with fewer than 8 slices' },
+  donut:       { when: 'Like Pie but with a center hole showing the total', columns: 'Label: category · Value: numeric' },
+  histogram:   { when: 'Distribution of a single numeric column — bins are automatic', columns: 'X: numeric column to bin', tip: 'Add a Color column to overlay multiple groups' },
+  boxplot:     { when: 'Median, IQR, and outliers — compare distributions across groups', columns: 'X: category (group by) · Y: numeric values', tip: 'Leave X empty for a single overall box' },
+  sankey:      { when: 'Flow volume between two sets of categories (funnels, networks)', columns: 'Source: origin category · Target: destination · Value: numeric flow weight', tip: 'Each row is one source → target link with its weight' },
+  number:      { when: 'Display a single key metric as a large number', columns: 'Value: numeric column — uses the first row only', tip: 'Add a Label for a caption below the number' },
+  boolean:     { when: 'Green/red status badge driven by a boolean or truthy value', columns: 'Value: boolean-like column — uses the first row only' },
+  conditional: { when: 'Color-coded badge driven by custom match rules', columns: 'Value: any column · Rules: patterns evaluated top-to-bottom' },
+  mermaid:     { when: 'Flowcharts, sequence diagrams, ER diagrams via Mermaid.js', columns: 'No data columns needed — write diagram code directly' },
+  table:       { when: 'Formatted data grid with per-column rename, formatting, and alignment', columns: 'All result columns shown by default — configure each individually' },
+}
+
+const isPlotType     = computed(() => node.value && !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey'].includes(node.value.chartType))
+const isPieType      = computed(() => node.value?.chartType === 'pie' || node.value?.chartType === 'donut')
+const isHistogramType= computed(() => node.value?.chartType === 'histogram')
+const isSankeyType   = computed(() => node.value?.chartType === 'sankey')
+const isStatType     = computed(() => node.value?.chartType === 'number')
+const isBoolType     = computed(() => node.value?.chartType === 'boolean')
+const isCondType     = computed(() => node.value?.chartType === 'conditional')
+const isMermaidType  = computed(() => node.value?.chartType === 'mermaid')
+const isTableType    = computed(() => node.value?.chartType === 'table')
+
+const chartHelp = computed(() => node.value ? CHART_HELP[node.value.chartType] ?? null : null)
 
 // ── Available query nodes for source selector ─────────────────────────────────
 const queryNodes = computed(() => schemaStore.nodes.filter((n) => n.kind === 'query'))
@@ -261,6 +287,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               <span class="ct-label">{{ ct.label }}</span>
             </button>
           </div>
+
+          <!-- Help text for selected chart type -->
+          <div v-if="chartHelp" class="chart-help">
+            <div class="chart-help-when">{{ chartHelp.when }}</div>
+            <div class="chart-help-cols">{{ chartHelp.columns }}</div>
+            <div v-if="chartHelp.tip" class="chart-help-tip">💡 {{ chartHelp.tip }}</div>
+          </div>
         </section>
 
         <!-- ── Mermaid code editor ─────────────────────────────────────────── -->
@@ -347,8 +380,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           </div>
         </section>
 
-        <!-- ── Plot columns (barY/barX/line/area/dot/cell) ────────────────── -->
-        <section v-if="isPlotType && !isPieType" class="pp-section">
+        <!-- ── Plot columns (barY/barX/line/area/dot/cell/boxplot) ─────────── -->
+        <section v-if="isPlotType && !isPieType && !isHistogramType" class="pp-section">
           <div class="pp-section-label">Columns</div>
           <div class="col-row">
             <label>X axis</label>
@@ -374,6 +407,53 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
           <div class="col-row">
             <label>Label</label>
             <select :value="node.labelColumn ?? ''" @change="setColumn('labelColumn', ($event.target as HTMLSelectElement).value)">
+              <option value="">— none —</option>
+              <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+          <div v-if="!availableColumns.length" class="pp-hint">Run a query to see columns</div>
+        </section>
+
+        <!-- ── Histogram columns ──────────────────────────────────────────── -->
+        <section v-if="isHistogramType" class="pp-section">
+          <div class="pp-section-label">Columns</div>
+          <div class="col-row">
+            <label>X (bins)</label>
+            <select :value="node.xColumn" @change="setColumn('xColumn', ($event.target as HTMLSelectElement).value)">
+              <option value="">— none —</option>
+              <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+          <div class="col-row">
+            <label>Color</label>
+            <select :value="node.colorColumn ?? ''" @change="setColumn('colorColumn', ($event.target as HTMLSelectElement).value)">
+              <option value="">— none —</option>
+              <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+          <div v-if="!availableColumns.length" class="pp-hint">Run a query to see columns</div>
+        </section>
+
+        <!-- ── Sankey columns ─────────────────────────────────────────────── -->
+        <section v-if="isSankeyType" class="pp-section">
+          <div class="pp-section-label">Columns</div>
+          <div class="col-row">
+            <label>Source</label>
+            <select :value="node.xColumn" @change="setColumn('xColumn', ($event.target as HTMLSelectElement).value)">
+              <option value="">— none —</option>
+              <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+          <div class="col-row">
+            <label>Target</label>
+            <select :value="node.yColumn" @change="setColumn('yColumn', ($event.target as HTMLSelectElement).value)">
+              <option value="">— none —</option>
+              <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
+            </select>
+          </div>
+          <div class="col-row">
+            <label>Value</label>
+            <select :value="node.colorColumn ?? ''" @change="setColumn('colorColumn', ($event.target as HTMLSelectElement).value)">
               <option value="">— none —</option>
               <option v-for="c in availableColumns" :key="c" :value="c">{{ c }}</option>
             </select>
@@ -729,6 +809,35 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
+}
+
+/* ── Chart help ── */
+.chart-help {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--surface-0, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chart-help-when {
+  font-size: 10.5px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.chart-help-cols {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+.chart-help-tip {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.4;
 }
 .ct-pill {
   display: flex;

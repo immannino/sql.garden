@@ -2,9 +2,13 @@
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { EditorView, keymap } from '@codemirror/view'
 import { EditorState, Prec, Compartment } from '@codemirror/state'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { basicSetup } from 'codemirror'
 import { sql, PostgreSQL } from '@codemirror/lang-sql'
+
 import { IS_DESKTOP } from '../lib/env'
+import { DUCKDB_FUNCTIONS } from '../lib/duckdbFunctions'
 
 const props = defineProps<{
   modelValue: string
@@ -85,19 +89,43 @@ const theme = EditorView.theme({
     backgroundColor: 'rgba(88,166,255,0.15)',
   },
   '.cm-completionIcon': { paddingRight: '4px' },
-  // SQL syntax token colors (GitHub Dark palette)
-  '.tok-keyword': { color: '#ff7b72', fontWeight: '500' },
-  '.tok-string': { color: '#a5d6ff' },
-  '.tok-string2': { color: '#a5d6ff' },
-  '.tok-number': { color: '#f2cc60' },
-  '.tok-comment': { color: '#6e7681', fontStyle: 'italic' },
-  '.tok-operator': { color: '#ff7b72' },
-  '.tok-punctuation': { color: '#8b949e' },
-  '.tok-name': { color: '#e6edf3' },
-  '.tok-variableName': { color: '#ffa657' },
-  '.tok-typeName': { color: '#ffa657' },
-  '.tok-function(.tok-variableName)': { color: '#d2a8ff' },
 }, { dark: true })
+
+// DuckDB function completions — require 2+ chars so they don't drown out
+// context-sensitive schema completions; boost -1 keeps them below schema results.
+function duckdbCompletionSource(context: import('@codemirror/autocomplete').CompletionContext) {
+  const word = context.matchBefore(/\w+/)
+  if (!word || word.to - word.from < 2) return null
+  return {
+    from: word.from,
+    options: DUCKDB_FUNCTIONS.map((f) => ({ label: f, type: 'function', detail: 'DuckDB', boost: -1 })),
+    filter: true,
+  }
+}
+const duckdbFunctionCompletions = PostgreSQL.language.data.of({
+  autocomplete: duckdbCompletionSource,
+})
+
+const sqlHighlight = Prec.highest(
+  syntaxHighlighting(
+    HighlightStyle.define([
+      { tag: tags.keyword,            color: '#ff7b72', fontWeight: '600' },
+      { tag: tags.operatorKeyword,    color: '#ff7b72', fontWeight: '600' },
+      { tag: tags.string,             color: '#a5d6ff' },
+      { tag: tags.number,             color: '#f2cc60' },
+      { tag: tags.comment,            color: '#6e7681', fontStyle: 'italic' },
+      { tag: tags.operator,           color: '#ff7b72' },
+      { tag: tags.punctuation,        color: '#8b949e' },
+      { tag: tags.name,               color: '#e6edf3' },
+      { tag: tags.variableName,       color: '#ffa657' },
+      { tag: tags.typeName,           color: '#ffa657' },
+      { tag: tags.function(tags.name),color: '#d2a8ff' },
+      { tag: tags.bool,               color: '#79c0ff' },
+      { tag: tags.null,               color: '#79c0ff' },
+      { tag: tags.special(tags.string), color: '#a5d6ff' },
+    ])
+  )
+)
 
 // ── Clipboard helpers ─────────────────────────────────────────────────────────
 // Wails v2 on macOS does not wire clipboard shortcuts through the WKWebView
@@ -173,7 +201,9 @@ function createView(parent: HTMLElement) {
     extensions: [
       basicSetup,
       sqlCompartment.of(makeSqlExt(props.schema)),
+      duckdbFunctionCompletions,
       theme,
+      sqlHighlight,
       clipboardKeymap,
       runKeymap,
       EditorView.updateListener.of((update) => {

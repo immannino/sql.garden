@@ -174,6 +174,10 @@ export function SaveFileWithDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveFileWithDialog'](arg1, arg2);
 }
 
+export function SaveImageFileWithDialog(arg1, arg2) {
+  return window['go']['main']['App']['SaveImageFileWithDialog'](arg1, arg2);
+}
+
 export function SaveTableData(arg1) {
   return window['go']['main']['App']['SaveTableData'](arg1);
 }

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 export interface Column {
   name: string
@@ -25,6 +25,11 @@ export interface TableNode {
   viewMode?: ViewMode
 }
 
+export interface SqlHistoryEntry {
+  sql: string
+  ts: number
+}
+
 export interface QueryNode {
   kind: 'query'
   id: string
@@ -38,6 +43,7 @@ export interface QueryNode {
   w?: number
   h?: number
   viewMode?: ViewMode
+  sqlHistory?: SqlHistoryEntry[]
 }
 
 export interface ConditionRule {
@@ -71,7 +77,7 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'histogram' | 'boxplot' | 'sankey' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
   xColumn: string
   yColumn: string
   colorColumn?: string
@@ -136,28 +142,61 @@ function nextColor(override?: string): string {
 export const useSchemaStore = defineStore('schema', () => {
   const nodes = ref<CanvasNode[]>([])
 
+  // ── Undo / Redo ────────────────────────────────────────────────────────────
+  const _undoStack = ref<string[]>([])
+  const _redoStack = ref<string[]>([])
+  const MAX_HISTORY = 60
+
+  function snapshot() {
+    _undoStack.value.push(JSON.stringify(nodes.value))
+    if (_undoStack.value.length > MAX_HISTORY) _undoStack.value.shift()
+    _redoStack.value = []
+  }
+
+  function undo() {
+    const prev = _undoStack.value.pop()
+    if (prev === undefined) return
+    _redoStack.value.push(JSON.stringify(nodes.value))
+    nodes.value = JSON.parse(prev)
+  }
+
+  function redo() {
+    const next = _redoStack.value.pop()
+    if (next === undefined) return
+    _undoStack.value.push(JSON.stringify(nodes.value))
+    nodes.value = JSON.parse(next)
+  }
+
+  const canUndo = computed(() => _undoStack.value.length > 0)
+  const canRedo = computed(() => _redoStack.value.length > 0)
+
   function addTable(table: Omit<TableNode, 'kind' | 'color'> & { color?: string }) {
     if (nodes.value.some((n) => n.id === table.id)) return
+    snapshot()
     nodes.value.push({ kind: 'table', ...table, color: nextColor(table.color) })
   }
 
   function addQueryNode(node: Omit<QueryNode, 'kind' | 'color'> & { color?: string }) {
     if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
     nodes.value.push({ kind: 'query', ...node, color: nextColor(node.color) })
   }
 
   function addChartNode(node: Omit<ChartNode, 'kind' | 'color'> & { color?: string }) {
     if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
     nodes.value.push({ kind: 'chart', ...node, color: nextColor(node.color) })
   }
 
   function addMarkdownNode(node: Omit<MarkdownNode, 'kind' | 'color'> & { color?: string }) {
     if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
     nodes.value.push({ kind: 'markdown', ...node, color: nextColor(node.color) })
   }
 
   function addSection(node: Omit<SectionNode, 'kind' | 'color'> & { color?: string }) {
     if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
     nodes.value.unshift({ kind: 'section', ...node, color: nextColor(node.color) })
   }
 
@@ -174,12 +213,14 @@ export const useSchemaStore = defineStore('schema', () => {
   }
 
   function removeNode(id: string) {
+    snapshot()
     nodes.value = nodes.value.filter((n) => n.id !== id)
   }
 
   function moveNodeToIndex(id: string, toStoreIndex: number) {
     const from = nodes.value.findIndex((n) => n.id === id)
     if (from === -1) return
+    snapshot()
     const arr = [...nodes.value]
     const [node] = arr.splice(from, 1)
     const clampedTo = Math.max(0, Math.min(arr.length, toStoreIndex > from ? toStoreIndex - 1 : toStoreIndex))
@@ -190,6 +231,7 @@ export const useSchemaStore = defineStore('schema', () => {
   function bringToFront(id: string) {
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx === -1 || idx === nodes.value.length - 1) return
+    snapshot()
     const arr = nodes.value.filter((n) => n.id !== id)
     nodes.value = [...arr, nodes.value[idx]]
   }
@@ -197,6 +239,7 @@ export const useSchemaStore = defineStore('schema', () => {
   function sendToBack(id: string) {
     const idx = nodes.value.findIndex((n) => n.id === id)
     if (idx === -1 || idx === 0) return
+    snapshot()
     const arr = nodes.value.filter((n) => n.id !== id)
     nodes.value = [nodes.value[idx], ...arr]
   }
@@ -214,6 +257,16 @@ export const useSchemaStore = defineStore('schema', () => {
   function updateQuerySql(id: string, sql: string) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'query') n.sql = sql
+  }
+
+  function pushQueryHistory(id: string, sql: string) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (!n || n.kind !== 'query') return
+    const trimmed = sql.trim()
+    if (!trimmed) return
+    const hist = n.sqlHistory ?? []
+    if (hist[0]?.sql === trimmed) return  // skip identical consecutive entries
+    n.sqlHistory = [{ sql: trimmed, ts: Date.now() }, ...hist].slice(0, 30)
   }
 
   function setQueryIsView(id: string, isView: boolean) {
@@ -284,6 +337,7 @@ export const useSchemaStore = defineStore('schema', () => {
       clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET }
     }
 
+    snapshot()
     nodes.value.push(clone)
     return newId
   }
@@ -295,6 +349,8 @@ export const useSchemaStore = defineStore('schema', () => {
   function clear() {
     nodes.value = []
     colorCursor = 0
+    _undoStack.value = []
+    _redoStack.value = []
   }
 
   return {
@@ -302,7 +358,8 @@ export const useSchemaStore = defineStore('schema', () => {
     addTable, addQueryNode, addChartNode, addMarkdownNode, addSection,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     moveNodeToIndex, bringToFront, sendToBack,
-    setRowCount, updateQuerySql, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
+    setRowCount, updateQuerySql, pushQueryHistory, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
     setNodeColor, duplicateNode, setColorCursor, clear,
+    snapshot, undo, redo, canUndo, canRedo,
   }
 })

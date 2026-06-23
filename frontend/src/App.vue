@@ -620,6 +620,62 @@ async function onDesktopClipboardKey(e: KeyboardEvent) {
   }
 }
 
+// ── Multi-node alignment ───────────────────────────────────────────────────────
+type AlignOp = 'left' | 'centerH' | 'right' | 'top' | 'middleV' | 'bottom' | 'distH' | 'distV'
+
+function getAlignBounds() {
+  return [...selectedIds.value].map((id) => {
+    const n = schemaStore.nodes.find((n) => n.id === id)
+    if (!n) return null
+    const w = ('w' in n ? n.w : undefined) ?? 280
+    const h = ('h' in n ? n.h : undefined) ?? 120
+    return { id, x: n.x, y: n.y, w, h }
+  }).filter(Boolean) as Array<{ id: string; x: number; y: number; w: number; h: number }>
+}
+
+function alignNodes(op: AlignOp) {
+  const bounds = getAlignBounds()
+  if (bounds.length < 2) return
+  schemaStore.snapshot()
+  const positions = new Map<string, { x: number; y: number }>()
+
+  if (op === 'left') {
+    const anchor = Math.min(...bounds.map((b) => b.x))
+    bounds.forEach((b) => positions.set(b.id, { x: anchor, y: b.y }))
+  } else if (op === 'centerH') {
+    const anchor = (Math.min(...bounds.map((b) => b.x)) + Math.max(...bounds.map((b) => b.x + b.w))) / 2
+    bounds.forEach((b) => positions.set(b.id, { x: anchor - b.w / 2, y: b.y }))
+  } else if (op === 'right') {
+    const anchor = Math.max(...bounds.map((b) => b.x + b.w))
+    bounds.forEach((b) => positions.set(b.id, { x: anchor - b.w, y: b.y }))
+  } else if (op === 'top') {
+    const anchor = Math.min(...bounds.map((b) => b.y))
+    bounds.forEach((b) => positions.set(b.id, { x: b.x, y: anchor }))
+  } else if (op === 'middleV') {
+    const anchor = (Math.min(...bounds.map((b) => b.y)) + Math.max(...bounds.map((b) => b.y + b.h))) / 2
+    bounds.forEach((b) => positions.set(b.id, { x: b.x, y: anchor - b.h / 2 }))
+  } else if (op === 'bottom') {
+    const anchor = Math.max(...bounds.map((b) => b.y + b.h))
+    bounds.forEach((b) => positions.set(b.id, { x: b.x, y: anchor - b.h }))
+  } else if (op === 'distH') {
+    const sorted = [...bounds].sort((a, b) => a.x - b.x)
+    const totalW = sorted.reduce((s, b) => s + b.w, 0)
+    const span = sorted.at(-1)!.x + sorted.at(-1)!.w - sorted[0].x
+    const gap = (span - totalW) / (sorted.length - 1)
+    let cur = sorted[0].x
+    sorted.forEach((b) => { positions.set(b.id, { x: cur, y: b.y }); cur += b.w + gap })
+  } else if (op === 'distV') {
+    const sorted = [...bounds].sort((a, b) => a.y - b.y)
+    const totalH = sorted.reduce((s, b) => s + b.h, 0)
+    const span = sorted.at(-1)!.y + sorted.at(-1)!.h - sorted[0].y
+    const gap = (span - totalH) / (sorted.length - 1)
+    let cur = sorted[0].y
+    sorted.forEach((b) => { positions.set(b.id, { x: b.x, y: cur }); cur += b.h + gap })
+  }
+
+  schemaStore.updatePositions(positions)
+}
+
 function onGlobalKey(e: KeyboardEvent) {
   // Cmd+K opens the search palette from anywhere — check before the input guard
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -637,6 +693,8 @@ function onGlobalKey(e: KeyboardEvent) {
   if (inInput) return
 
   if (e.metaKey || e.ctrlKey) {
+    if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); schemaStore.undo(); return }
+    if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); schemaStore.redo(); return }
     if (e.key === ',') { e.preventDefault(); showSettings.value = !showSettings.value }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
     if (e.key === '-') { e.preventDefault(); canvasRef.value?.zoomOut() }
@@ -851,6 +909,73 @@ onUnmounted(async () => {
           </svg>
           {{ restoreConfirm ? 'Reset?' : 'Restore' }}
         </button>
+
+        <!-- Alignment tools — shown when 2+ nodes are selected -->
+        <template v-if="selectedIds.size >= 2">
+          <div class="toolbar-divider" />
+          <div class="align-group" title="Align selected nodes">
+            <button class="align-btn" title="Align left edges"    @click="alignNodes('left')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="2" y1="1" x2="2" y2="13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="3.5" y="2.5" width="7" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="3.5" y="8.5" width="5" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <button class="align-btn" title="Align centers horizontally" @click="alignNodes('centerH')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="7" y1="1" x2="7" y2="13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="2.5" y="2.5" width="9" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="3.5" y="8.5" width="7" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <button class="align-btn" title="Align right edges"   @click="alignNodes('right')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="12" y1="1" x2="12" y2="13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="3.5" y="2.5" width="7" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="5.5" y="8.5" width="5" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <div class="align-sep" />
+            <button class="align-btn" title="Align top edges"     @click="alignNodes('top')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="1" y1="2" x2="13" y2="2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="1.5" y="3.5" width="4" height="8" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="8.5" y="3.5" width="4" height="6" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <button class="align-btn" title="Align middles vertically" @click="alignNodes('middleV')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="1" y1="7" x2="13" y2="7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="1.5" y="2" width="4" height="10" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="8.5" y="3.5" width="4" height="7" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <button class="align-btn" title="Align bottom edges"  @click="alignNodes('bottom')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="1" y1="12" x2="13" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="1.5" y="2.5" width="4" height="8" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="8.5" y="4.5" width="4" height="6" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <div class="align-sep" />
+            <button class="align-btn" title="Distribute horizontally" @click="alignNodes('distH')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="1" y1="2" x2="1" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <line x1="13" y1="2" x2="13" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="3" y="4" width="3" height="6" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="8" y="4" width="3" height="6" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+            <button class="align-btn" title="Distribute vertically" @click="alignNodes('distV')">
+              <svg viewBox="0 0 14 14" fill="none">
+                <line x1="2" y1="1" x2="12" y2="1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <line x1="2" y1="13" x2="12" y2="13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <rect x="4" y="3" width="6" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+                <rect x="4" y="8" width="6" height="3" rx="0.8" fill="currentColor" opacity="0.75"/>
+              </svg>
+            </button>
+          </div>
+        </template>
 
         <div class="toolbar-divider" />
 
@@ -1199,6 +1324,40 @@ onUnmounted(async () => {
   color: var(--error);
   background: rgba(248, 81, 73, 0.08);
   border-color: rgba(248, 81, 73, 0.3);
+}
+
+/* ── Alignment tools ── */
+.align-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.align-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  -webkit-app-region: no-drag;
+}
+
+.align-btn svg { width: 14px; height: 14px; }
+.align-btn:hover { color: var(--text-primary); background: var(--surface-2); border-color: var(--border); }
+
+.align-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .main-area {

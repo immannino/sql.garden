@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useTheme, type Theme } from '../composables/useTheme'
+import { usePrefs } from '../composables/usePrefs'
 import { IS_DESKTOP } from '../lib/env'
 import type { main } from '../../wailsjs/go/models'
 
@@ -8,6 +9,7 @@ const props = defineProps<{ initialTab?: 'appearance' | 'mcp' | 'updates' }>()
 const emit = defineEmits<{ close: [] }>()
 
 const { theme, setTheme } = useTheme()
+const { showGrid } = usePrefs()
 
 type Tab = 'appearance' | 'mcp' | 'updates'
 const activeTab = ref<Tab>(props.initialTab ?? 'appearance')
@@ -203,6 +205,15 @@ function onBackdrop(e: MouseEvent) {
                   {{ opt[1] }}
                 </button>
               </div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Canvas grid</label>
+              <label class="toggle-row">
+                <input type="checkbox" v-model="showGrid" class="toggle-check" />
+                <span class="toggle-track"><span class="toggle-thumb" /></span>
+                <span class="toggle-desc">Show dot grid overlay</span>
+              </label>
             </div>
           </template>
 
@@ -440,6 +451,41 @@ function onBackdrop(e: MouseEvent) {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-check { display: none; }
+.toggle-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.toggle-check:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 0.15s, background 0.15s;
+}
+.toggle-check:checked + .toggle-track .toggle-thumb {
+  transform: translateX(14px);
+  background: #fff;
+}
+.toggle-desc { font-size: 12px; color: var(--text-secondary); }
 
 .field-input, .field-select {
   padding: 7px 10px;

@@ -88,6 +88,8 @@ export function SaveConnection(arg1:main.ConnectionRecord):Promise<main.Connecti
 
 export function SaveFileWithDialog(arg1:string,arg2:string):Promise<string>;
 
+export function SaveImageFileWithDialog(arg1:string,arg2:string):Promise<string>;
+
 export function SaveTableData(arg1:string):Promise<void>;
 
 export function SendAIMessage(arg1:Array<main.AIChatMessage>):Promise<main.AIResponse>;

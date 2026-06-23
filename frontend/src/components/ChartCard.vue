@@ -13,6 +13,7 @@ import { useChartResults } from '../composables/useChartResults'
 import { useChartPanel } from '../composables/useChartPanel'
 import { useAppReady } from '../composables/useAppReady'
 import { exportData, type ExportFormat } from '../lib/exportData'
+import { IS_DESKTOP } from '../lib/env'
 
 const props = defineProps<{ node: ChartNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -142,14 +143,18 @@ async function runLinked() {
   }
 }
 
+// ── Legend toggle ─────────────────────────────────────────────────────────────
+const showLegend = ref(true)
+
 // ── Display-type guards ───────────────────────────────────────────────────────
-const isPlotType    = computed(() => !['number', 'boolean', 'conditional', 'mermaid', 'table'].includes(props.node.chartType))
+const isPlotType    = computed(() => !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey'].includes(props.node.chartType))
 const isStatType    = computed(() => props.node.chartType === 'number')
 const isBoolType    = computed(() => props.node.chartType === 'boolean')
 const isCondType    = computed(() => props.node.chartType === 'conditional')
 const isBadgeType   = computed(() => isBoolType.value || isCondType.value)
 const isMermaidType = computed(() => props.node.chartType === 'mermaid')
 const isTableType   = computed(() => props.node.chartType === 'table')
+const isSankeyType  = computed(() => props.node.chartType === 'sankey')
 
 // ── Stat (number) computed ────────────────────────────────────────────────────
 const statValue = computed(() => {
@@ -398,28 +403,33 @@ watchEffect(() => {
   if (!isPlotType.value) { chartContainer.value.innerHTML = ''; return }
   const data = effectiveData.value
   const { chartType, xColumn, yColumn, colorColumn, labelColumn, color } = props.node
-  if (!data || !xColumn || !yColumn) { chartContainer.value.innerHTML = ''; return }
+  const needsY = chartType !== 'histogram'
+  if (!data || !xColumn || (needsY && !yColumn)) { chartContainer.value.innerHTML = ''; return }
   try {
     const plotW = (props.node.w ?? 340) - 32
     const plotH = props.node.h ?? 180
     if (chartType === 'pie' || chartType === 'donut') {
-      const el = buildPieSvg(data.rows, xColumn, yColumn, plotW, plotH, chartType === 'donut')
+      const el = buildPieSvg(data.rows, xColumn, yColumn!, plotW, plotH, chartType === 'donut')
       chartContainer.value.replaceChildren(el); return
     }
     const fill = colorColumn ?? color, stroke = colorColumn ?? color
     const marks: Plot.Markish[] = []
     switch (chartType) {
-      case 'barY':  marks.push(Plot.barY(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleY([0])); break
-      case 'barX':  marks.push(Plot.barX(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleX([0])); break
-      case 'lineY': marks.push(Plot.lineY(data.rows, { x: xColumn, y: yColumn, stroke }), Plot.ruleY([0])); break
-      case 'areaY': marks.push(Plot.areaY(data.rows, { x: xColumn, y: yColumn, fill, fillOpacity: 0.4, stroke }), Plot.ruleY([0])); break
-      case 'cell':  marks.push(Plot.cell(data.rows, { x: xColumn, y: yColumn, fill })); break
-      default:      marks.push(Plot.dot(data.rows, { x: xColumn, y: yColumn, fill })); break
+      case 'barY':      marks.push(Plot.barY(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleY([0])); break
+      case 'barX':      marks.push(Plot.barX(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleX([0])); break
+      case 'lineY':     marks.push(Plot.lineY(data.rows, { x: xColumn, y: yColumn, stroke }), Plot.ruleY([0])); break
+      case 'areaY':     marks.push(Plot.areaY(data.rows, { x: xColumn, y: yColumn, fill, fillOpacity: 0.4, stroke }), Plot.ruleY([0])); break
+      case 'cell':      marks.push(Plot.cell(data.rows, { x: xColumn, y: yColumn, fill })); break
+      case 'histogram': marks.push(Plot.rectY(data.rows, { ...Plot.binX({ y: 'count' }, { x: xColumn }), fill: fill ?? '#4e79a7' } as Parameters<typeof Plot.rectY>[1]), Plot.ruleY([0])); break
+      case 'boxplot':   marks.push(Plot.boxY(data.rows, { x: xColumn, y: yColumn, fill: fill ?? '#4e79a7' })); break
+      default:          marks.push(Plot.dot(data.rows, { x: xColumn, y: yColumn, fill })); break
     }
-    if (labelColumn) marks.push(Plot.text(data.rows, { x: xColumn, y: yColumn, text: labelColumn, fontSize: 9, fill: 'currentColor', dy: -6 }))
+    if (labelColumn && chartType !== 'histogram' && chartType !== 'boxplot') {
+      marks.push(Plot.text(data.rows, { x: xColumn, y: yColumn, text: labelColumn, fontSize: 9, fill: 'currentColor', dy: -6 }))
+    }
     const el = Plot.plot({
       width: plotW, height: plotH, marginBottom: 36, marginLeft: 42,
-      color: colorColumn ? { legend: true } : undefined,
+      color: colorColumn ? { legend: showLegend.value } : undefined,
       style: { background: 'none', color: '#8b949e', fontSize: '10px', overflow: 'visible' },
       marks,
     })
@@ -459,6 +469,109 @@ watch(
   { immediate: true },
 )
 
+// ── Sankey rendering ──────────────────────────────────────────────────────────
+const sankeyContainer = ref<HTMLDivElement | null>(null)
+
+async function renderSankey(el: HTMLDivElement) {
+  const data = effectiveData.value
+  const { xColumn, yColumn, colorColumn } = props.node
+  if (!data || !xColumn || !yColumn) { el.innerHTML = ''; return }
+
+  try {
+    const { sankey } = await import('d3-sankey')
+
+    const nodeIndex = new Map<string, number>()
+    const rawNodes: Array<{ name: string }> = []
+    const rawLinks: Array<{ source: number; target: number; value: number }> = []
+
+    for (const row of data.rows) {
+      const src = String(row[xColumn] ?? '')
+      const tgt = String(row[yColumn] ?? '')
+      const val = colorColumn ? Math.max(0, Number(row[colorColumn]) || 0) : 1
+      if (!src || !tgt || src === tgt) continue
+
+      if (!nodeIndex.has(src)) { nodeIndex.set(src, rawNodes.length); rawNodes.push({ name: src }) }
+      if (!nodeIndex.has(tgt)) { nodeIndex.set(tgt, rawNodes.length); rawNodes.push({ name: tgt }) }
+      rawLinks.push({ source: nodeIndex.get(src)!, target: nodeIndex.get(tgt)!, value: val })
+    }
+
+    if (!rawNodes.length || !rawLinks.length) { el.innerHTML = ''; return }
+
+    const w = (props.node.w ?? 340) - 32
+    const h = props.node.h ?? 240
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const layout = (sankey as any)()
+      .nodeWidth(16)
+      .nodePadding(10)
+      .extent([[1, 1], [w - 1, h - 1]])
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { nodes, links } = layout({
+      nodes: rawNodes.map((d) => ({ ...d })),
+      links: rawLinks.map((d) => ({ ...d })),
+    }) as { nodes: any[]; links: any[] }
+
+    const ns = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(ns, 'svg')
+    svg.setAttribute('width', String(w))
+    svg.setAttribute('height', String(h))
+    svg.style.overflow = 'visible'
+    svg.style.display = 'block'
+
+    // Links (ribbons)
+    for (const link of links) {
+      const x0 = link.source.x1, x1 = link.target.x0
+      const y0 = link.y0, y1 = link.y1
+      const lw = Math.max(1, link.width)
+      const mx = (x0 + x1) / 2
+      const d = `M${x0},${y0 - lw / 2} C${mx},${y0 - lw / 2} ${mx},${y1 - lw / 2} ${x1},${y1 - lw / 2} L${x1},${y1 + lw / 2} C${mx},${y1 + lw / 2} ${mx},${y0 + lw / 2} ${x0},${y0 + lw / 2} Z`
+      const path = document.createElementNS(ns, 'path')
+      path.setAttribute('d', d)
+      path.setAttribute('fill', PIE_PALETTE[link.source.index % PIE_PALETTE.length])
+      path.setAttribute('fill-opacity', '0.38')
+      svg.appendChild(path)
+    }
+
+    // Nodes + labels
+    for (const node of nodes) {
+      const color = PIE_PALETTE[node.index % PIE_PALETTE.length]
+      const rect = document.createElementNS(ns, 'rect')
+      rect.setAttribute('x', String(node.x0))
+      rect.setAttribute('y', String(node.y0))
+      rect.setAttribute('width', String(node.x1 - node.x0))
+      rect.setAttribute('height', String(Math.max(1, node.y1 - node.y0)))
+      rect.setAttribute('fill', color)
+      rect.setAttribute('rx', '2')
+      svg.appendChild(rect)
+
+      const isRightSide = node.x0 > w / 2
+      const text = document.createElementNS(ns, 'text')
+      text.setAttribute('x', String(isRightSide ? node.x0 - 5 : node.x1 + 5))
+      text.setAttribute('y', String((node.y0 + node.y1) / 2))
+      text.setAttribute('text-anchor', isRightSide ? 'end' : 'start')
+      text.setAttribute('dominant-baseline', 'middle')
+      text.setAttribute('font-size', '9.5')
+      text.setAttribute('fill', '#8b949e')
+      text.textContent = String(node.name).slice(0, 16)
+      svg.appendChild(text)
+    }
+
+    el.replaceChildren(svg)
+  } catch (err) {
+    el.innerHTML = `<p class="chart-err">${err instanceof Error ? err.message.split('\n')[0] : 'Sankey render error'}</p>`
+  }
+}
+
+watch(
+  [isSankeyType, effectiveData, () => props.node.xColumn, () => props.node.yColumn, () => props.node.colorColumn, () => props.node.w, () => props.node.h, sankeyContainer],
+  async ([isSankey, , , , , , , el]) => {
+    if (!isSankey || !el) return
+    await renderSankey(el as HTMLDivElement)
+  },
+  { immediate: true },
+)
+
 // ── Export ────────────────────────────────────────────────────────────────────
 function onExport(fmt: ExportFormat) {
   const d = effectiveData.value
@@ -466,8 +579,109 @@ function onExport(fmt: ExportFormat) {
   exportData(fmt, d.columns, d.rows as Record<string, unknown>[], props.node.name)
 }
 
+const showExportMenu = ref(false)
+
+function triggerDownload(href: string, filename: string) {
+  const a = document.createElement('a')
+  a.href = href
+  a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+// Resolve CSS variables, fonts, and currentColor so the SVG is self-contained.
+function prepareSvgForExport(svgEl: SVGSVGElement): SVGSVGElement {
+  const clone = svgEl.cloneNode(true) as SVGSVGElement
+  const docStyle = getComputedStyle(document.documentElement)
+
+  const textColor  = docStyle.getPropertyValue('--text-primary').trim()  || '#e6edf3'
+  const mutedColor = docStyle.getPropertyValue('--text-muted').trim()    || '#6e7681'
+  const borderColor= docStyle.getPropertyValue('--border').trim()        || '#30363d'
+  const fontFamily = getComputedStyle(document.body).fontFamily
+    || '"JetBrains Mono", ui-monospace, monospace'
+
+  // Set root color so currentColor in child elements resolves correctly.
+  clone.style.color = textColor
+  clone.style.fontFamily = fontFamily
+
+  // Inline a <style> block that re-declares the CSS vars used by Observable Plot
+  // and stamps font-family on all text elements.
+  const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+  styleEl.textContent = [
+    ':root {',
+    `  --text-primary: ${textColor};`,
+    `  --text-muted: ${mutedColor};`,
+    `  --border: ${borderColor};`,
+    '}',
+    `text, tspan { font-family: ${fontFamily}; fill: ${textColor}; }`,
+  ].join('\n')
+  clone.insertBefore(styleEl, clone.firstChild)
+
+  // Resolve any remaining currentColor attributes on paths/lines/rects.
+  for (const el of Array.from(clone.querySelectorAll('[fill="currentColor"],[stroke="currentColor"]'))) {
+    const src = svgEl.querySelector(`[data-id="${el.getAttribute('data-id')}"]`) ?? el
+    const computed = getComputedStyle(src as Element)
+    if (el.getAttribute('fill') === 'currentColor')   el.setAttribute('fill',   computed.color || textColor)
+    if (el.getAttribute('stroke') === 'currentColor') el.setAttribute('stroke', computed.color || textColor)
+  }
+
+  return clone
+}
+
+function getExportSvg(): SVGSVGElement | null {
+  return (chartContainer.value?.querySelector('svg') ?? sankeyContainer.value?.querySelector('svg')) as SVGSVGElement | null
+}
+
+async function downloadSvg() {
+  showExportMenu.value = false
+  const svgEl = getExportSvg()
+  if (!svgEl) return
+  const prepared = prepareSvgForExport(svgEl)
+  const svgStr = new XMLSerializer().serializeToString(prepared)
+  const name = `${props.node.name}.svg`
+  if (IS_DESKTOP) {
+    const { SaveFileWithDialog } = await import('../../wailsjs/go/main/App')
+    await SaveFileWithDialog(name, svgStr)
+  } else {
+    triggerDownload('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr), name)
+  }
+}
+
+async function downloadPng() {
+  showExportMenu.value = false
+  const svgEl = getExportSvg()
+  if (!svgEl) return
+  const { width, height } = svgEl.getBoundingClientRect()
+  if (!width || !height) return
+  const prepared = prepareSvgForExport(svgEl)
+  const svgStr = new XMLSerializer().serializeToString(prepared)
+  const svgDataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr)
+  const img = new Image()
+  await new Promise<void>((res) => { img.onload = () => res(); img.onerror = () => res(); img.src = svgDataUrl })
+  const dpr = window.devicePixelRatio || 1
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(width * dpr)
+  canvas.height = Math.round(height * dpr)
+  const ctx = canvas.getContext('2d')!
+  ctx.scale(dpr, dpr)
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim() || '#0d1117'
+  ctx.fillRect(0, 0, width, height)
+  ctx.drawImage(img, 0, 0, width, height)
+  const name = `${props.node.name}.png`
+  const dataUrl = canvas.toDataURL('image/png')
+  if (IS_DESKTOP) {
+    const { SaveImageFileWithDialog } = await import('../../wailsjs/go/main/App')
+    await SaveImageFileWithDialog(name, dataUrl)
+  } else {
+    triggerDownload(dataUrl, name)
+  }
+}
+
 // ── Auto-run on mount ─────────────────────────────────────────────────────────
 onMounted(() => {
+  window.addEventListener('mousedown', () => { showExportMenu.value = false })
   if (props.node.sourceId) {
     if (queryResults[props.node.sourceId]) return
     if (isAppReady.value) { runLinked(); return }
@@ -538,6 +752,42 @@ onUnmounted(() => {
         <svg viewBox="0 0 10 10" fill="none">
           <rect x="1" y="1" width="8" height="8" rx="1" stroke="white" stroke-width="1.2"/>
           <polyline points="2,6.5 3.8,4.5 5.5,5.8 7.5,3" stroke="white" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+      <!-- Chart image export -->
+      <div v-if="isPlotType || isSankeyType" class="export-img-wrap">
+        <button
+          class="collapse-btn"
+          title="Export chart image"
+          @mousedown.stop
+          @click.stop="showExportMenu = !showExportMenu"
+        >
+          <svg viewBox="0 0 10 10" fill="none">
+            <path d="M5 1v5.5M3 4.5l2 2 2-2" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M1 7.5v1h8v-1" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div v-if="showExportMenu" class="export-img-menu" @mousedown.stop>
+          <button class="export-img-item" @click.stop="downloadPng">PNG</button>
+          <button class="export-img-item" @click.stop="downloadSvg">SVG</button>
+        </div>
+      </div>
+
+      <!-- Legend toggle — only when a color column is mapped -->
+      <button
+        v-if="isPlotType && node.colorColumn"
+        class="collapse-btn"
+        :class="{ active: showLegend }"
+        title="Toggle legend"
+        @mousedown.stop
+        @click.stop="showLegend = !showLegend"
+      >
+        <svg viewBox="0 0 10 10" fill="none">
+          <rect x="1" y="2" width="3" height="3" rx="0.5" fill="white" opacity="0.9"/>
+          <line x1="5.5" y1="3.5" x2="9" y2="3.5" stroke="white" stroke-width="1.1" stroke-linecap="round"/>
+          <rect x="1" y="6" width="3" height="3" rx="0.5" fill="white" opacity="0.5"/>
+          <line x1="5.5" y1="7.5" x2="9" y2="7.5" stroke="white" stroke-width="1.1" stroke-linecap="round" opacity="0.5"/>
         </svg>
       </button>
 
@@ -615,6 +865,19 @@ onUnmounted(() => {
     <!-- Mermaid diagram display -->
     <div v-if="!isCollapsed && isMermaidType" class="chart-area mermaid-area" :style="{ height: `${(node.h ?? 240) + 24}px` }">
       <div ref="mermaidContainer" class="mermaid-plot" />
+    </div>
+
+    <!-- Sankey diagram display -->
+    <div v-if="!isCollapsed && isSankeyType" class="chart-area" :style="{ height: `${(node.h ?? 240) + 36}px` }">
+      <div ref="sankeyContainer" class="chart-plot" />
+      <div v-if="!effectiveData || !node.xColumn || !node.yColumn" class="chart-placeholder">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M4 8h6l4 8 6-4h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 24h6l4-8 6 4h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Set Source and Target columns in the properties panel' }}</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
+      </div>
     </div>
 
     <!-- Table display -->
@@ -761,6 +1024,33 @@ onUnmounted(() => {
 .collapse-btn svg { width: 10px; height: 10px; }
 .collapse-btn:hover { opacity: 1; background: rgba(255,255,255,0.15); }
 .chartonly-btn.active { opacity: 1; background: rgba(255,255,255,0.2); }
+
+.export-img-wrap { position: relative; display: flex; }
+.export-img-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  z-index: 9999;
+  min-width: 56px;
+}
+.export-img-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+.export-img-item:hover { background: var(--surface-1); color: var(--accent); }
 
 .props-btn { opacity: 0; }
 .chart-card:hover .props-btn { opacity: 0.55; }

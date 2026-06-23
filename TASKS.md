@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
-> Version: v0.0.0-alpha.5
-> Updated: 2026-06-22
+> Version: v0.0.0-alpha.6
+> Updated: 2026-06-23
 
 ---
 
@@ -83,23 +83,23 @@
 
 ### Polish / QoL
 - [x] **Node color picker** — Hover header to reveal palette button; 12 preset swatches + native color input. Works on all node types including sections.
-- [ ] **Canvas background grid/dots** — Optional dot grid overlay, toggle in Settings > Appearance.
+- [x] **Canvas background grid/dots** — Optional dot grid overlay, toggle in Settings > Appearance.
 - [x] **Node search / jump-to** — Cmd+K palette: search nodes by name, jump viewport to them.
 - [x] **Duplicate node** — Cmd+D clones selected node(s) offset by 24px, auto-selects the copies.
-- [ ] **Undo/redo for canvas operations** — Moving, adding, deleting nodes. (SQL edits already have CodeMirror history.)
+- [x] **Undo/redo for canvas operations** — Cmd+Z / Cmd+Shift+Z. Snapshots on add, delete, duplicate, z-order, drag start, resize start.
 - [ ] **Section auto-resize** — Option to auto-expand a Section to wrap its contained nodes.
 - [ ] **Multi-node alignment tools** — Align left/right/top/bottom, distribute evenly.
 - [x] **Right-click context menu** — Node menu: Duplicate, Bring to Front/Back, Delete. Canvas menu: Add Query/Chart/Note/Section, Fit View.
 
 ### Query / Data
-- [ ] **DuckDB-specific autocomplete** — Add DuckDB built-in functions (DATE_TRUNC, STRFTIME, LIST_AGG, REGEXP_MATCHES, etc.) to CodeMirror completions alongside table/column names.
-- [ ] **Query result column type badges** — Small type icon (int, str, date…) in results table header.
+- [x] **DuckDB-specific autocomplete** — 150+ DuckDB functions added to CodeMirror, requires 2+ chars, boost -1 so schema results float above.
+- [x] **Query result column type badges** — INT/FLOAT/TEXT/BOOL/DATE/TS chips in results table headers (QueryCard + QueryPanel).
 - [ ] **Query history per node** — Log of previously run SQL per node, mini timeline to revert.
 - [ ] **Pinned/auto-run queries** — Option to run a query node automatically on open.
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
 
 ### Charts
-- [ ] **Chart export as PNG/SVG** — Button in chart header to download the rendered chart.
+- [x] **Chart export as PNG/SVG** — Download button on chart header; native save dialog on desktop, browser download on web. Fonts and CSS vars inlined for standalone SVG.
 - [ ] **Chart legend toggle** — Show/hide Observable Plot legend without re-running query.
 - [ ] **More chart types** — Histogram, scatter matrix, waterfall, heatmap.
 

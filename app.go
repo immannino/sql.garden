@@ -441,7 +441,7 @@ func (a *App) SaveAppSettings(s AppSettings) error {
 	return a.persist.saveSetting(appSettingsKey, string(raw))
 }
 
-const appVersion = "v0.0.0-alpha.5"
+const appVersion = "v0.0.0-alpha.6"
 
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
@@ -1086,6 +1086,7 @@ func (a *App) SaveFileWithDialog(suggestedName, content string) (string, error) 
 		"tsv":  {DisplayName: "TSV (*.tsv)", Pattern: "*.tsv"},
 		"json": {DisplayName: "JSON (*.json)", Pattern: "*.json"},
 		"md":   {DisplayName: "Markdown (*.md)", Pattern: "*.md"},
+		"svg":  {DisplayName: "SVG Image (*.svg)", Pattern: "*.svg"},
 	}
 	filters := []runtime.FileFilter{}
 	if f, ok := filterMap[ext]; ok {
@@ -1103,6 +1104,35 @@ func (a *App) SaveFileWithDialog(suggestedName, content string) (string, error) 
 	}
 
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("writing file: %w", err)
+	}
+	return path, nil
+}
+
+// SaveImageFileWithDialog shows a native save dialog for a PNG image supplied
+// as a base64 data URL (data:image/png;base64,...). Returns the written path.
+func (a *App) SaveImageFileWithDialog(suggestedName, dataURL string) (string, error) {
+	const prefix = "data:image/png;base64,"
+	if !strings.HasPrefix(dataURL, prefix) {
+		return "", fmt.Errorf("unexpected data URL format")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dataURL, prefix))
+	if err != nil {
+		return "", fmt.Errorf("decoding image: %w", err)
+	}
+
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Save image",
+		DefaultFilename: suggestedName,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "PNG Image (*.png)", Pattern: "*.png"},
+			{DisplayName: "All files", Pattern: "*.*"},
+		},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if err := os.WriteFile(path, raw, 0644); err != nil {
 		return "", fmt.Errorf("writing file: %w", err)
 	}
 	return path, nil

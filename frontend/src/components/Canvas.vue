@@ -10,11 +10,13 @@ import { useSchemaStore } from '../stores/schema'
 import type { CanvasNode, SectionNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
+import { usePrefs } from '../composables/usePrefs'
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
 const { openCanvasMenu } = useContextMenu()
 const { dropTable } = useTableOps()
+const { showGrid } = usePrefs()
 
 const pan = ref({ x: 100, y: 60 })
 const zoom = ref(1)
@@ -107,6 +109,11 @@ const viewportRef = ref<HTMLElement | null>(null)
 const BASE_GRID = 24
 const gridCellSize = computed(() => `${BASE_GRID * zoom.value}px`)
 const bgOffset = computed(() => `${pan.value.x}px ${pan.value.y}px`)
+const gridBgImage = computed(() =>
+  showGrid.value
+    ? 'radial-gradient(circle, #2d3748 1.5px, transparent 1.5px)'
+    : 'none'
+)
 
 const transformStyle = computed(() => ({
   transform: `translate(${pan.value.x}px, ${pan.value.y}px) scale(${zoom.value})`,
@@ -163,6 +170,7 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onCardResizeStart(payload: { id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }) {
+  schemaStore.snapshot()
   resize.value = {
     id: payload.id,
     startMouse: { x: payload.mouseX, y: payload.mouseY },
@@ -203,6 +211,7 @@ function onCardDragStart(payload: { id: string; mouseX: number; mouseY: number; 
     }
   }
 
+  schemaStore.snapshot()
   drag.value = { startMouse: { x: mouseX, y: mouseY }, startPositions }
 }
 
@@ -421,7 +430,7 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   background-color: var(--canvas-bg);
-  background-image: radial-gradient(circle, #2d3748 1.5px, transparent 1.5px);
+  background-image: v-bind(gridBgImage);
   background-size: v-bind(gridCellSize) v-bind(gridCellSize);
   background-position: v-bind(bgOffset);
   pointer-events: none;
