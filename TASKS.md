@@ -1,6 +1,6 @@
 # sql.garden — Task Tracker
 
-> Version: v0.0.0-alpha.6
+> Version: v0.0.0-alpha.7
 > Updated: 2026-06-24 (session 2)
 
 ---

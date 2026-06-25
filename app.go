@@ -441,7 +441,7 @@ func (a *App) SaveAppSettings(s AppSettings) error {
 	return a.persist.saveSetting(appSettingsKey, string(raw))
 }
 
-const appVersion = "v0.0.0-alpha.6"
+const appVersion = "v0.0.0-alpha.7"
 
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
