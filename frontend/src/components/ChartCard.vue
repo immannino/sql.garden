@@ -702,6 +702,7 @@ onUnmounted(() => {
   <div
     class="chart-card"
     :class="{ selected }"
+    :data-node-id="node.id"
     :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 340}px` }"
     @mousedown="onMouseDown"
     @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"

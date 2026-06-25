@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.0-alpha.6
-> Updated: 2026-06-23
+> Updated: 2026-06-24 (session 2)
 
 ---
 
@@ -21,6 +21,7 @@
 - [x] Window drag on macOS toolbar (Wails CSSDragProperty)
 - [x] Toolbar dblclick to maximize (WindowToggleMaximise)
 - [x] Startup update check banner
+- [x] Import history — Recent tab in Import modal, re-import from file path or URL
 
 ### Layers Panel
 - [x] Flat z-order list (top = front, Figma-style)
@@ -36,15 +37,24 @@
 - [x] Auto-refresh interval support
 - [x] Schema-aware SQL autocomplete (table + column names from canvas)
 - [x] Empty result set shows 0 rows instead of null error
+- [x] Query history per node — History tab, per-node log of past SQL runs with restore
 
 ### Chart Nodes
-- [x] Chart types: barY, barX, lineY, areaY, dot, cell, pie/donut, number, boolean, conditional, mermaid, table
+- [x] Chart types: barY, barX, lineY, areaY, dot, cell, pie/donut, number, boolean, conditional, mermaid, table, histogram, boxplot, sankey
 - [x] Source: inline SQL or linked Query node
 - [x] Inline SQL editor (CodeMirror) with schema autocomplete
 - [x] Chart-only view mode
 - [x] Observable Plot rendering with padding fix (no header overhang)
 - [x] Conditional formatting rules engine
 - [x] Table chart with column config (format, align, hide, rename)
+- [x] Chart legend toggle — show/hide color legend without re-running
+- [x] Per-chart help text in properties panel (when/columns/tip)
+
+### Canvas Operations
+- [x] Multi-node alignment tools — 8 ops: left/centerH/right/top/middleV/bottom/distributeH/distributeV
+- [x] Right-click context menu — Node: Duplicate, Bring to Front/Back, Delete. Canvas: Add nodes, Fit View.
+- [x] Undo/redo — Cmd+Z / Cmd+Shift+Z, snapshots on all mutating operations
+- [x] Auto-fit mosaic layout — toolbar button + right-click "Wrap in Section" + "Mosaic Contents" on Section nodes; uses real DOM sizes via `data-node-id`
 
 ### Sidebar
 - [x] Layers tab (z-order, drag reorder, front/back)
@@ -58,16 +68,56 @@
 - [x] Auto-configure Claude Desktop (claude_desktop_config.json write)
 - [x] AI panel with chat + tool-call streaming
 - [x] HelpPanel "Open MCP Setup" deep-link into Settings
+- [x] `resize_node` and `move_node` MCP tools — agents can programmatically size and reposition canvas nodes
+- [x] `focus_node` MCP tool — pan and zoom viewport to a specific node by id; useful for directing attention after dashboard build
+- [x] `update_query_node` MCP tool — overwrite SQL (and optionally rename) an existing query node in-place; no delete-and-recreate needed
+- [x] `import_csv_data` MCP tool — agents pipe raw CSV text directly into DuckDB; pre-import column-count validation returns actionable errors on malformed CSV
+- [x] `import_url` MCP tool — server-side fetch of remote CSV/Parquet/JSON; bypasses CORS entirely
 
 ### Keyboard & Input
 - [x] Global hotkey guard: no app shortcuts fire when focus is in a text field or code editor
 - [x] Cmd+A/C/X/V shim for plain input/textarea in Wails WKWebView (via Go runtime.Clipboard*)
 - [x] CodeMirror clipboard keymaps (copy/paste route through Go runtime, not DOM events)
 - [x] Delete/Backspace bulk-deletes selected canvas nodes (with table data cleanup)
+- [x] Node color picker — 12 preset swatches + native color input, all node types
+- [x] Canvas background grid/dots — dot grid overlay, toggle in Settings > Appearance
+- [x] Node search / jump-to — Cmd+K palette
+- [x] Duplicate node — Cmd+D, offset 24px, auto-selects copies
 
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
 - [x] macOS .app zipped before artifact upload (preserves bundle structure)
+
+---
+
+## 🧪 Testing
+
+### Working Agreement
+Every new feature or tool must ship with a corresponding Red/Green integration test in `cmd/mcp-test/main.go` before it is considered done. Tests must pass against the running app before moving to the next task.
+
+### MCP Integration Tests (`cmd/mcp-test`)
+Run with: `go run ./cmd/mcp-test` (app must be running first)
+
+- [x] Health endpoint
+- [x] `tools/list` — asserts all expected tool names are registered
+- [x] `list_tables`, `run_query` (success + error surface)
+- [x] `add_query_node` — stable nodeId, idempotent dedup
+- [x] `add_chart_node` — inline SQL, source_id linking, number chart type
+- [x] `add_markdown_node` — content round-trip, nodeId
+- [x] `import_file` — sales.csv (24 rows), service_health.csv (10 rows), bad path error
+- [x] `list_canvas_nodes` — node added this session appears in list
+- [x] `clear_canvas` — emits clear action
+- [x] `fit_view` — fit, reset, default modes
+- [x] `import_csv_data` — 3-col basic (rowCount=3), CRLF normalization (rowCount=2), quoted fields with embedded commas (rowCount=3), missing csv_text error
+- [x] `import_csv_data` column-count mismatch — header/data field count mismatch returns error naming the row number; no canvas action emitted
+- [x] `import_url` — local HTTP test server (rowCount=4), unreachable host error, missing url error
+- [x] `import_url` Content-Type fallback — CSV served at extensionless URL with `Content-Type: text/csv` header imports correctly
+- [x] `resize_node` — correct width/height on action, missing node_id error
+- [x] `resize_node` batch — 4 nodes resized in sequence all emit distinct resize_node actions
+- [x] `move_node` — correct x/y on action, missing node_id error
+- [x] Canvas stream reconnect — new subscriber after prior connection closed still receives events
+- [x] `focus_node` — emits focus_node action with correct nodeId, missing node_id error
+- [x] `update_query_node` — emits update_query action with new SQL, optional name propagation, missing field errors
 
 ---
 
@@ -82,30 +132,31 @@
 ## 📋 Backlog
 
 ### Polish / QoL
-- [x] **Node color picker** — Hover header to reveal palette button; 12 preset swatches + native color input. Works on all node types including sections.
-- [x] **Canvas background grid/dots** — Optional dot grid overlay, toggle in Settings > Appearance.
-- [x] **Node search / jump-to** — Cmd+K palette: search nodes by name, jump viewport to them.
-- [x] **Duplicate node** — Cmd+D clones selected node(s) offset by 24px, auto-selects the copies.
-- [x] **Undo/redo for canvas operations** — Cmd+Z / Cmd+Shift+Z. Snapshots on add, delete, duplicate, z-order, drag start, resize start.
-- [ ] **Section auto-resize** — Option to auto-expand a Section to wrap its contained nodes.
-- [ ] **Multi-node alignment tools** — Align left/right/top/bottom, distribute evenly.
-- [x] **Right-click context menu** — Node menu: Duplicate, Bring to Front/Back, Delete. Canvas menu: Add Query/Chart/Note/Section, Fit View.
+- [ ] **Section auto-resize** — Option to auto-expand a Section node to wrap its contained nodes.
+- [ ] **Pinned/auto-run queries** — Option to run a query node automatically on canvas open.
 
 ### Query / Data
-- [x] **DuckDB-specific autocomplete** — 150+ DuckDB functions added to CodeMirror, requires 2+ chars, boost -1 so schema results float above.
-- [x] **Query result column type badges** — INT/FLOAT/TEXT/BOOL/DATE/TS chips in results table headers (QueryCard + QueryPanel).
-- [ ] **Query history per node** — Log of previously run SQL per node, mini timeline to revert.
-- [ ] **Pinned/auto-run queries** — Option to run a query node automatically on open.
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
 
 ### Charts
-- [x] **Chart export as PNG/SVG** — Download button on chart header; native save dialog on desktop, browser download on web. Fonts and CSS vars inlined for standalone SVG.
-- [ ] **Chart legend toggle** — Show/hide Observable Plot legend without re-running query.
-- [ ] **More chart types** — Histogram, scatter matrix, waterfall, heatmap.
+- [ ] **More chart types** — Scatter matrix, waterfall, heatmap (histogram/boxplot/sankey done).
+
+### MCP Expansions
+- [ ] **`set_node_color` MCP tool** — Let agents apply color coding to canvas nodes (e.g. highlight a KPI node in red when a threshold is breached).
+- [ ] **`add_section` MCP tool** — Agents can create Section containers to visually group related nodes without the user needing to right-click.
+
+### Canvas Structure
+- [ ] **Canvas tabs** — Multiple named canvases as tabs within the app (Figma documents-style). Data model: `nodes` keyed by `canvasId`; SQLite `canvas_state` gets a `canvas_id` column + migration. Tab strip in toolbar. Significant effort — needs a dedicated planning session before touching persistence layer.
+
+### Discovery & Content
+- [ ] **In-app changelog/news feed** — Small panel (or Settings tab) that fetches a hosted JSON/RSS feed you control. Surfaces release notes, tips, and announcements. Weekend-scale effort.
+- [ ] **Dataset directory** — Hosted JSON index of curated public datasets (FRED, Census, Our World in Data, stock market, healthcare, etc.) with name, source URL, description, tags, and license. In-app "Explore" panel fetches + searches the index; clicking a dataset fires the existing URL import flow. Index starts as a hand-curated JSON file in a GitHub repo — no database needed. Strong differentiator; dataset index is a separate hosted artifact.
+- [ ] **Community / Explore page** — Longer-term hub surfacing dataset directory, user-shared canvases, blog posts, and curated data stories. Builds on the dataset directory and news feed foundations.
+
+### Reporting
+- [ ] **Report / PDF export** — Export selected nodes as a formatted report. Approach: "report mode" re-renders selected nodes into a normal scrollable document layout (outside canvas coordinates), then `window.print()` or a Go-invoked Puppeteer/wkhtmltopdf subprocess. Chart SVGs export cleanly; tables need pagination. Scope as "export selected nodes as report" not "screenshot the canvas."
 
 ### Connections
-- [x] **Create query node from connection table** — Hover a table/view in the Connections explorer and click `+` to hoist it as a canvas QueryNode with `SELECT * FROM alias.schema.table LIMIT 1000`.
-- [ ] **Run queries against connections** — Ad-hoc SQL editor scoped to an attached connection (currently connections only have schema explorer).
 - [ ] **SSH tunnel support** — Config for connecting to remote DBs via SSH port-forward.
 
 ### Desktop-specific
@@ -122,3 +173,4 @@
 - **Data loaders via local scripts** — Observable Framework-style shell-out loaders piping stdout into DuckDB tables. Post-v1, desktop-only via Wails exec.
 - **SSH tunnels** — Post-v1.
 - **Windows code signing** — No cert yet.
+- **Run queries against connections** — Ad-hoc SQL editor per connection; moot because `SELECT * FROM alias.schema.table` already works via DuckDB ATTACH.

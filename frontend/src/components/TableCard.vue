@@ -126,6 +126,7 @@ function typeColor(type: string) {
     ref="cardRef"
     class="table-card"
     :class="{ selected, 'has-h': !!table.h }"
+    :data-node-id="table.id"
     :style="{ left: `${table.x}px`, top: `${table.y}px`, width: `${table.w ?? 240}px`, ...(table.h ? { height: `${table.h}px` } : {}) }"
     @mousedown="onMouseDown"
     @contextmenu.prevent.stop="openNodeMenu(table.id, $event.clientX, $event.clientY)"

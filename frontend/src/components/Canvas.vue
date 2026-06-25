@@ -12,6 +12,8 @@ import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
 import { usePrefs } from '../composables/usePrefs'
 
+const emit = defineEmits<{ mosaicContents: [id: string] }>()
+
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
 const { openCanvasMenu } = useContextMenu()
@@ -325,7 +327,19 @@ function focusNode(id: string) {
 
 function resetZoom() { zoom.value = 1 }
 
-defineExpose({ fitView, resetZoom, zoomIn, zoomOut, getCenter, focusNode, zoom, pan })
+function getViewportRect(): { x: number; y: number; w: number; h: number } {
+  if (!viewportRef.value) return { x: 0, y: 0, w: 1600, h: 900 }
+  const vw = viewportRef.value.clientWidth
+  const vh = viewportRef.value.clientHeight
+  return {
+    x: -pan.value.x / zoom.value,
+    y: -pan.value.y / zoom.value,
+    w: vw / zoom.value,
+    h: vh / zoom.value,
+  }
+}
+
+defineExpose({ fitView, resetZoom, zoomIn, zoomOut, getCenter, getViewportRect, getNodeCanvasBounds, focusNode, zoom, pan })
 
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)
@@ -362,6 +376,7 @@ onUnmounted(() => {
         :selected="selectedIds.has(node.id)"
         @drag-start="onCardDragStart"
         @resize-start="onCardResizeStart"
+        @mosaic-contents="emit('mosaicContents', $event)"
       />
       <!-- Other nodes -->
       <template v-for="node in schemaStore.nodes.filter(n => n.kind !== 'section')" :key="node.id">

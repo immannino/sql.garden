@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,16 +55,20 @@ const (
 // ── Canvas-action SSE buffer ──────────────────────────────────────────────────
 
 type canvasAction struct {
-	Type     string `json:"type"`
-	NodeID   string `json:"nodeId"`
-	Name     string `json:"name"`
-	SQL      string `json:"sql"`
-	Content  string `json:"content"`
-	SourceID string `json:"sourceId"`
-	ChartType string `json:"chartType"`
-	XColumn  string `json:"xColumn"`
-	YColumn  string `json:"yColumn"`
-	RowCount int64  `json:"rowCount"`
+	Type      string  `json:"type"`
+	NodeID    string  `json:"nodeId"`
+	Name      string  `json:"name"`
+	SQL       string  `json:"sql"`
+	Content   string  `json:"content"`
+	SourceID  string  `json:"sourceId"`
+	ChartType string  `json:"chartType"`
+	XColumn   string  `json:"xColumn"`
+	YColumn   string  `json:"yColumn"`
+	RowCount  int64   `json:"rowCount"`
+	Width     float64 `json:"width"`
+	Height    float64 `json:"height"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
 }
 
 type actionBuffer struct {
@@ -274,7 +279,10 @@ func (r *runner) runAll() {
 		required := []string{
 			"list_tables", "list_canvas_nodes", "run_query",
 			"add_query_node", "add_chart_node", "add_markdown_node",
-			"import_file", "clear_canvas",
+			"import_file", "import_csv_data", "import_url",
+			"resize_node", "move_node",
+			"focus_node", "update_query_node",
+			"clear_canvas", "fit_view",
 		}
 		nameSet := make(map[string]bool, len(names))
 		for _, n := range names {
@@ -625,6 +633,534 @@ func (r *runner) runAll() {
 		}
 		if act.Name != "fit" {
 			return fmt.Errorf("want name=fit for default mode, got %q", act.Name)
+		}
+		return nil
+	})
+
+	// ── import_csv_data ───────────────────────────────────────────────────────
+
+	r.run("import_csv_data: basic 3-column CSV emits table action with rowCount=3", func() error {
+		csv := "name,age,city\nAlice,30,New York\nBob,25,Los Angeles\nCharlie,35,Chicago"
+		resp, actions, err := r.call("import_csv_data", map[string]any{
+			"csv_text":   csv,
+			"table_name": "mcp_test_csv_basic",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("import reported error: %q", resp)
+		}
+		act := findAction(actions, "table")
+		if act == nil {
+			return fmt.Errorf("no 'table' canvas action emitted (response: %q)", resp)
+		}
+		if act.RowCount != 3 {
+			return fmt.Errorf("want rowCount=3, got %d", act.RowCount)
+		}
+		if act.Name != "mcp_test_csv_basic" {
+			return fmt.Errorf("want name=mcp_test_csv_basic, got %q", act.Name)
+		}
+		return nil
+	})
+
+	r.run("import_csv_data: CRLF line endings normalized correctly (2 rows)", func() error {
+		csv := "product,sales\r\nWidgets,100\r\nGadgets,200\r\n"
+		resp, actions, err := r.call("import_csv_data", map[string]any{
+			"csv_text":   csv,
+			"table_name": "mcp_test_csv_crlf",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("import reported error: %q", resp)
+		}
+		act := findAction(actions, "table")
+		if act == nil {
+			return fmt.Errorf("no 'table' canvas action emitted (response: %q)", resp)
+		}
+		if act.RowCount != 2 {
+			return fmt.Errorf("want rowCount=2, got %d", act.RowCount)
+		}
+		return nil
+	})
+
+	r.run("import_csv_data: quoted fields with commas parse correctly (3 rows)", func() error {
+		csv := `date,description,amount` + "\n" +
+			`2024-01-15,"Coffee, oat milk latte",4.75` + "\n" +
+			`2024-01-16,"Lunch, sandwich + chips",12.50` + "\n" +
+			`2024-01-17,Groceries,87.32`
+		resp, actions, err := r.call("import_csv_data", map[string]any{
+			"csv_text":   csv,
+			"table_name": "mcp_test_csv_quoted",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("import reported error: %q", resp)
+		}
+		act := findAction(actions, "table")
+		if act == nil {
+			return fmt.Errorf("no 'table' canvas action emitted (response: %q)", resp)
+		}
+		if act.RowCount != 3 {
+			return fmt.Errorf("want rowCount=3, got %d", act.RowCount)
+		}
+		return nil
+	})
+
+	r.run("import_csv_data: missing csv_text returns error (no canvas action)", func() error {
+		resp, actions, err := r.call("import_csv_data", map[string]any{
+			"table_name": "mcp_test_csv_nodata",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing csv_text, got: %q", resp)
+		}
+		if act := findAction(actions, "table"); act != nil {
+			return fmt.Errorf("expected no canvas action for failed import")
+		}
+		return nil
+	})
+
+	// ── import_url ────────────────────────────────────────────────────────────
+
+	r.run("import_url: local HTTP server CSV emits table action with rowCount=4", func() error {
+		csvData := "ticker,price,volume\nAAPL,182.50,52000000\nGOOGL,141.23,18000000\nMSFT,378.85,22000000\nAMZN,186.40,31000000\n"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/data.csv", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/csv")
+			fmt.Fprint(w, csvData)
+		})
+		ln, lnErr := net.Listen("tcp", "127.0.0.1:0")
+		if lnErr != nil {
+			return fmt.Errorf("could not start test server: %w", lnErr)
+		}
+		srv := &http.Server{Handler: mux}
+		go srv.Serve(ln) //nolint:errcheck
+		defer srv.Close()
+
+		testURL := fmt.Sprintf("http://127.0.0.1:%d/data.csv", ln.Addr().(*net.TCPAddr).Port)
+		resp, actions, err := r.call("import_url", map[string]any{
+			"url":        testURL,
+			"table_name": "mcp_test_url_stocks",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("import reported error: %q", resp)
+		}
+		act := findAction(actions, "table")
+		if act == nil {
+			return fmt.Errorf("no 'table' canvas action emitted (response: %q)", resp)
+		}
+		if act.RowCount != 4 {
+			return fmt.Errorf("want rowCount=4, got %d", act.RowCount)
+		}
+		return nil
+	})
+
+	r.run("import_url: unreachable host returns error (no canvas action)", func() error {
+		resp, actions, err := r.call("import_url", map[string]any{
+			"url":        "http://127.0.0.1:19999/nonexistent.csv",
+			"table_name": "mcp_test_url_bad",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for unreachable URL, got: %q", resp)
+		}
+		if act := findAction(actions, "table"); act != nil {
+			return fmt.Errorf("expected no canvas action for failed import, got one")
+		}
+		return nil
+	})
+
+	r.run("import_url: missing url param returns error", func() error {
+		resp, _, err := r.call("import_url", map[string]any{
+			"table_name": "mcp_test_url_nourl",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing url, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── resize_node ───────────────────────────────────────────────────────────
+
+	r.run("resize_node emits resize_node action with correct width/height", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Resize Target",
+			"sql":  "SELECT 1 AS val",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_resize_target"
+
+		resp, actions, err := r.call("resize_node", map[string]any{
+			"node_id": nodeID,
+			"width":   640.0,
+			"height":  480.0,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("resize returned error: %q", resp)
+		}
+		act := findAction(actions, "resize_node")
+		if act == nil {
+			return fmt.Errorf("no 'resize_node' canvas action emitted (response: %q)", resp)
+		}
+		if act.NodeID != nodeID {
+			return fmt.Errorf("want nodeId=%q, got %q", nodeID, act.NodeID)
+		}
+		if act.Width != 640 {
+			return fmt.Errorf("want width=640, got %g", act.Width)
+		}
+		if act.Height != 480 {
+			return fmt.Errorf("want height=480, got %g", act.Height)
+		}
+		return nil
+	})
+
+	r.run("resize_node: missing node_id returns error", func() error {
+		resp, _, err := r.call("resize_node", map[string]any{
+			"width":  300.0,
+			"height": 200.0,
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── move_node ─────────────────────────────────────────────────────────────
+
+	r.run("move_node emits move_node action with correct coordinates", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Move Target",
+			"sql":  "SELECT 2 AS val",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_move_target"
+
+		resp, actions, err := r.call("move_node", map[string]any{
+			"node_id": nodeID,
+			"x":       150.0,
+			"y":       300.0,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("move returned error: %q", resp)
+		}
+		act := findAction(actions, "move_node")
+		if act == nil {
+			return fmt.Errorf("no 'move_node' canvas action emitted (response: %q)", resp)
+		}
+		if act.NodeID != nodeID {
+			return fmt.Errorf("want nodeId=%q, got %q", nodeID, act.NodeID)
+		}
+		if act.X != 150 {
+			return fmt.Errorf("want x=150, got %g", act.X)
+		}
+		if act.Y != 300 {
+			return fmt.Errorf("want y=300, got %g", act.Y)
+		}
+		return nil
+	})
+
+	r.run("move_node: missing node_id returns error", func() error {
+		resp, _, err := r.call("move_node", map[string]any{
+			"x": 100.0,
+			"y": 200.0,
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── import_csv_data: column-count mismatch (backlog gap) ──────────────────
+
+	r.run("import_csv_data: header/data column count mismatch returns actionable error", func() error {
+		// Header has 4 columns but every data row has only 3.
+		csv := "name,age,city,country\nAlice,30,New York\nBob,25,London"
+		resp, actions, err := r.call("import_csv_data", map[string]any{
+			"csv_text":   csv,
+			"table_name": "mcp_test_csv_mismatch",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "mismatch") {
+			return fmt.Errorf("expected 'mismatch' in error, got: %q", resp)
+		}
+		if !strings.Contains(resp, "row 2") {
+			return fmt.Errorf("expected row number in error, got: %q", resp)
+		}
+		if act := findAction(actions, "table"); act != nil {
+			return fmt.Errorf("expected no canvas action for malformed CSV, got one")
+		}
+		return nil
+	})
+
+	// ── canvas-stream reconnect (backlog gap) ─────────────────────────────────
+
+	r.run("canvas-stream: new subscriber receives events after a prior connection was closed", func() error {
+		// Open a second SSE connection, close it, open a third one, then verify
+		// that events still flow to the third — tests that the sync.Map lifecycle
+		// correctly removes closed subscribers and adds new ones.
+		buf2 := &actionBuffer{}
+		cancel2, err := subscribeSSE(buf2)
+		if err != nil {
+			return fmt.Errorf("second subscribe: %w", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		cancel2() // simulate disconnect
+		time.Sleep(100 * time.Millisecond)
+
+		buf3 := &actionBuffer{}
+		cancel3, err := subscribeSSE(buf3)
+		if err != nil {
+			return fmt.Errorf("third subscribe: %w", err)
+		}
+		defer cancel3()
+		time.Sleep(100 * time.Millisecond)
+
+		before := time.Now()
+		if _, err := callTool("fit_view", map[string]any{"mode": "fit"}); err != nil {
+			return err
+		}
+		time.Sleep(sseWait)
+		if findAction(buf3.since(before), "fit_view") == nil {
+			return fmt.Errorf("reconnected SSE client did not receive canvas action")
+		}
+		return nil
+	})
+
+	// ── import_url: Content-Type fallback (backlog gap) ───────────────────────
+
+	r.run("import_url: CSV served without file extension uses Content-Type fallback", func() error {
+		csvData := "country,gdp_trillion,population_m\nUSA,25.46,331\nChina,17.73,1412\nGermany,4.07,84\n"
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/export", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			fmt.Fprint(w, csvData)
+		})
+		ln, lnErr := net.Listen("tcp", "127.0.0.1:0")
+		if lnErr != nil {
+			return fmt.Errorf("start server: %w", lnErr)
+		}
+		srv := &http.Server{Handler: mux}
+		go srv.Serve(ln) //nolint:errcheck
+		defer srv.Close()
+
+		testURL := fmt.Sprintf("http://127.0.0.1:%d/api/export", ln.Addr().(*net.TCPAddr).Port)
+		resp, actions, err := r.call("import_url", map[string]any{
+			"url":        testURL,
+			"table_name": "mcp_test_url_ct_fallback",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("import reported error: %q", resp)
+		}
+		act := findAction(actions, "table")
+		if act == nil {
+			return fmt.Errorf("no 'table' canvas action emitted (response: %q)", resp)
+		}
+		if act.RowCount != 3 {
+			return fmt.Errorf("want rowCount=3, got %d", act.RowCount)
+		}
+		return nil
+	})
+
+	// ── batch resize (backlog gap) ────────────────────────────────────────────
+
+	r.run("resize_node: batch of 4 nodes all emit distinct resize_node actions", func() error {
+		type batchNode struct{ name, sql, id string }
+		batch := []batchNode{
+			{"Batch A", "SELECT 1 AS a", "mcp_batch_a"},
+			{"Batch B", "SELECT 2 AS b", "mcp_batch_b"},
+			{"Batch C", "SELECT 3 AS c", "mcp_batch_c"},
+			{"Batch D", "SELECT 4 AS d", "mcp_batch_d"},
+		}
+		for _, n := range batch {
+			if _, _, err := r.call("add_query_node", map[string]any{"name": n.name, "sql": n.sql}); err != nil {
+				return fmt.Errorf("adding %s: %w", n.name, err)
+			}
+		}
+		before := time.Now()
+		sizes := [][2]float64{{320, 240}, {480, 360}, {640, 480}, {320, 180}}
+		for i, n := range batch {
+			if _, _, err := r.call("resize_node", map[string]any{
+				"node_id": n.id,
+				"width":   sizes[i][0],
+				"height":  sizes[i][1],
+			}); err != nil {
+				return fmt.Errorf("resizing %s: %w", n.name, err)
+			}
+		}
+		var resizes []canvasAction
+		for _, a := range r.buf.since(before) {
+			if a.Type == "resize_node" {
+				resizes = append(resizes, a)
+			}
+		}
+		if len(resizes) < 4 {
+			return fmt.Errorf("want 4 resize_node actions, got %d", len(resizes))
+		}
+		return nil
+	})
+
+	// ── focus_node ────────────────────────────────────────────────────────────
+
+	r.run("focus_node emits focus_node action with correct nodeId", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Focus Target",
+			"sql":  "SELECT 1 AS val",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_focus_target"
+		resp, actions, err := r.call("focus_node", map[string]any{"node_id": nodeID})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("focus_node returned error: %q", resp)
+		}
+		act := findAction(actions, "focus_node")
+		if act == nil {
+			return fmt.Errorf("no 'focus_node' canvas action emitted (response: %q)", resp)
+		}
+		if act.NodeID != nodeID {
+			return fmt.Errorf("want nodeId=%q, got %q", nodeID, act.NodeID)
+		}
+		return nil
+	})
+
+	r.run("focus_node: missing node_id returns error", func() error {
+		resp, _, err := r.call("focus_node", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── update_query_node ─────────────────────────────────────────────────────
+
+	r.run("update_query_node emits update_query action with new SQL", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Update Target",
+			"sql":  "SELECT 1 AS original",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_update_target"
+		newSQL := "SELECT 42 AS updated, 'hello' AS msg"
+		resp, actions, err := r.call("update_query_node", map[string]any{
+			"node_id": nodeID,
+			"sql":     newSQL,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("update_query_node returned error: %q", resp)
+		}
+		act := findAction(actions, "update_query")
+		if act == nil {
+			return fmt.Errorf("no 'update_query' canvas action emitted (response: %q)", resp)
+		}
+		if act.NodeID != nodeID {
+			return fmt.Errorf("want nodeId=%q, got %q", nodeID, act.NodeID)
+		}
+		if act.SQL != newSQL {
+			return fmt.Errorf("want sql=%q, got %q", newSQL, act.SQL)
+		}
+		return nil
+	})
+
+	r.run("update_query_node with name sets name on action", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Rename Me Query",
+			"sql":  "SELECT 1",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_rename_me_query"
+		resp, actions, err := r.call("update_query_node", map[string]any{
+			"node_id": nodeID,
+			"sql":     "SELECT 2 AS renamed",
+			"name":    "Renamed Query",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("update returned error: %q", resp)
+		}
+		act := findAction(actions, "update_query")
+		if act == nil {
+			return fmt.Errorf("no 'update_query' canvas action emitted (response: %q)", resp)
+		}
+		if act.Name != "Renamed Query" {
+			return fmt.Errorf("want name=%q, got %q", "Renamed Query", act.Name)
+		}
+		return nil
+	})
+
+	r.run("update_query_node: missing sql returns error", func() error {
+		resp, _, err := r.call("update_query_node", map[string]any{
+			"node_id": "mcp_update_target",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing sql, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("update_query_node: missing node_id returns error", func() error {
+		resp, _, err := r.call("update_query_node", map[string]any{
+			"sql": "SELECT 1",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
 		}
 		return nil
 	})

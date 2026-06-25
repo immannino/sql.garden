@@ -45,6 +45,8 @@ export namespace main {
 	    hasPosition?: boolean;
 	    x?: number;
 	    y?: number;
+	    width?: number;
+	    height?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CanvasAction(source);
@@ -68,6 +70,8 @@ export namespace main {
 	        this.hasPosition = source["hasPosition"];
 	        this.x = source["x"];
 	        this.y = source["y"];
+	        this.width = source["width"];
+	        this.height = source["height"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

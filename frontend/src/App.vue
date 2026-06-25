@@ -253,16 +253,35 @@ function contextMenuSections(): MenuSection[] {
   const node = schemaStore.nodes.find((n) => n.id === id)
   if (!node) return []
 
-  return [
-    {
+  const isSection = node.kind === 'section'
+  const multiNonSection = selectedIds.value.size >= 2 &&
+    [...selectedIds.value].every((sid) => schemaStore.nodes.find((n) => n.id === sid)?.kind !== 'section')
+
+  const items: MenuSection[] = []
+
+  if (isSection) {
+    items.push({ label: 'Mosaic Contents', action: () => mosaicSectionContents(id) })
+    items.push({ divider: true })
+  }
+
+  if (multiNonSection) {
+    items.push({ label: 'Wrap in Section', action: wrapInSection })
+    items.push({ divider: true })
+  }
+
+  if (!isSection) {
+    items.push({
       label: 'Duplicate',
       shortcut: '⌘D',
       action: () => {
         const newId = schemaStore.duplicateNode(id)
         if (newId) { selectedIds.value = new Set([newId]); canvasRef.value?.focusNode(newId) }
       },
-    },
-    { divider: true },
+    })
+    items.push({ divider: true })
+  }
+
+  items.push(
     { label: 'Bring to Front', action: () => schemaStore.bringToFront(id) },
     { label: 'Send to Back',   action: () => schemaStore.sendToBack(id) },
     { divider: true },
@@ -274,7 +293,9 @@ function contextMenuSections(): MenuSection[] {
         selectedIds.value = new Set()
       },
     },
-  ]
+  )
+
+  return items
 }
 
 function onCreateQueryFromConnection(payload: { name: string; sql: string }) {
@@ -505,6 +526,30 @@ function handleCanvasAction(action: main.CanvasAction) {
     if (nodeId) exportNodeData(nodeId, fmt)
     return
   }
+  if (action.type === 'resize_node') {
+    if (action.nodeId && action.width && action.height)
+      schemaStore.updateNodeSize(action.nodeId, action.width, action.height)
+    return
+  }
+  if (action.type === 'move_node') {
+    if (action.nodeId != null && action.x != null && action.y != null)
+      schemaStore.updatePositions(new Map([[action.nodeId, { x: action.x, y: action.y }]]))
+    return
+  }
+  if (action.type === 'focus_node') {
+    if (action.nodeId) setTimeout(() => canvasRef.value?.focusNode(action.nodeId), 60)
+    return
+  }
+  if (action.type === 'update_query') {
+    if (action.nodeId) {
+      schemaStore.updateQuerySql(action.nodeId, action.sql ?? '')
+      if (action.name) {
+        const node = schemaStore.nodes.find(n => n.id === action.nodeId)
+        if (node) node.name = action.name
+      }
+    }
+    return
+  }
   const pos = action.hasPosition ? { x: action.x ?? 0, y: action.y ?? 0 } : nextAIPosition()
   const id = action.nodeId ?? `ai_${Date.now()}`
   if (action.type === 'query') {
@@ -631,6 +676,125 @@ function getAlignBounds() {
     const h = ('h' in n ? n.h : undefined) ?? 120
     return { id, x: n.x, y: n.y, w, h }
   }).filter(Boolean) as Array<{ id: string; x: number; y: number; w: number; h: number }>
+}
+
+function autoMosaic() {
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const target = selectedIds.value.size > 0
+    ? schemaStore.nodes.filter((n) => selectedIds.value.has(n.id))
+    : schemaStore.nodes
+  if (target.length < 2) return
+  const vp = canvas.getViewportRect()
+  const aspect = vp.w / Math.max(1, vp.h)
+  const { positions } = computeMosaicLayout(target, aspect)
+  schemaStore.snapshot()
+  schemaStore.updatePositions(positions)
+  setTimeout(() => canvas.fitView(), 50)
+}
+
+// Shared mosaic engine — returns (positions, contentW, contentH) without committing anything.
+function computeMosaicLayout(
+  nodeList: typeof schemaStore.nodes,
+  aspect: number,
+): { positions: Map<string, { x: number; y: number }>; contentW: number; contentH: number } {
+  const bounds = nodeList.map((n) => {
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const w = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const h = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    return { node: n, w, h }
+  })
+  const totalArea = bounds.reduce((s, b) => s + b.w * b.h, 0)
+  const targetW = Math.sqrt(totalArea * aspect) * 1.25
+  const sorted = [...bounds].sort((a, b) => b.w * b.h - a.w * a.h)
+  const GAP = 24
+  const positions = new Map<string, { x: number; y: number }>()
+  let rowX = 0, rowY = 0, rowMaxH = 0
+  for (const b of sorted) {
+    if (rowX > 0 && rowX + b.w > targetW) { rowY += rowMaxH + GAP; rowX = 0; rowMaxH = 0 }
+    positions.set(b.node.id, { x: rowX, y: rowY })
+    rowX += b.w + GAP
+    rowMaxH = Math.max(rowMaxH, b.h)
+  }
+  // Content bounding box of the layout result
+  let contentW = 0, contentH = 0
+  for (const b of sorted) {
+    const p = positions.get(b.node.id)!
+    contentW = Math.max(contentW, p.x + b.w)
+    contentH = Math.max(contentH, p.y + b.h)
+  }
+  return { positions, contentW, contentH }
+}
+
+function wrapInSection() {
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const target = schemaStore.nodes.filter(
+    (n) => selectedIds.value.has(n.id) && n.kind !== 'section',
+  )
+  if (target.length < 2) return
+
+  const vp = canvas.getViewportRect()
+  const aspect = vp.w / Math.max(1, vp.h)
+  const { positions: relPos, contentW, contentH } = computeMosaicLayout(target, aspect)
+
+  const PAD = 20
+  const TOP_PAD = 52
+  const center = canvas.getCenter()
+  const sectionW = contentW + PAD * 2
+  const sectionH = contentH + TOP_PAD + PAD
+  const sectionX = center.x - sectionW / 2
+  const sectionY = center.y - sectionH / 2
+
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const [id, pos] of relPos) {
+    positions.set(id, { x: sectionX + PAD + pos.x, y: sectionY + TOP_PAD + pos.y })
+  }
+
+  schemaStore.snapshot()
+  schemaStore.updatePositions(positions)
+  const sectionId = `section_${Date.now()}`
+  schemaStore.addSection({ id: sectionId, name: 'Group', x: sectionX, y: sectionY, w: sectionW, h: sectionH })
+  selectedIds.value = new Set()
+  setTimeout(() => canvas.fitView(), 50)
+}
+
+function mosaicSectionContents(sectionId: string) {
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const section = schemaStore.nodes.find((n) => n.id === sectionId)
+  if (!section || section.kind !== 'section') return
+
+  // Find nodes whose center falls inside the section bounds
+  const inside = schemaStore.nodes.filter((n) => {
+    if (n.kind === 'section' || n.id === sectionId) return false
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const nw = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const nh = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    const cx = n.x + nw / 2
+    const cy = n.y + nh / 2
+    return cx >= section.x && cx <= section.x + section.w && cy >= section.y && cy <= section.y + section.h
+  })
+  if (!inside.length) return
+
+  const vp = canvas.getViewportRect()
+  const aspect = vp.w / Math.max(1, vp.h)
+  const { positions: relPos, contentW, contentH } = computeMosaicLayout(inside, aspect)
+
+  const PAD = 20         // horizontal + bottom padding
+  const TOP_PAD = 52    // clears label bar (8px offset + 22px height + 22px breathing room)
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const [id, pos] of relPos) {
+    positions.set(id, { x: section.x + PAD + pos.x, y: section.y + TOP_PAD + pos.y })
+  }
+
+  // Resize section to fit
+  const newW = Math.max(section.w, contentW + PAD * 2)
+  const newH = Math.max(section.h, contentH + TOP_PAD + PAD)
+
+  schemaStore.snapshot()
+  schemaStore.updatePositions(positions)
+  schemaStore.updateNodeSize(sectionId, newW, newH)
 }
 
 function alignNodes(op: AlignOp) {
@@ -981,6 +1145,21 @@ onUnmounted(async () => {
 
         <button
           class="toolbar-btn"
+          :title="selectedIds.size > 0 ? 'Auto-arrange selected nodes into a mosaic' : 'Auto-arrange all nodes into a mosaic'"
+          :disabled="schemaStore.nodes.length < 2"
+          @click="autoMosaic()"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <rect x="1" y="1" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="11" y="1" width="4" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="1" y="9" width="4" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="7" y="9" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.3"/>
+          </svg>
+          Mosaic
+        </button>
+
+        <button
+          class="toolbar-btn"
           title="Fit all tables in view"
           @click="canvasRef?.fitView()"
         >
@@ -1044,7 +1223,7 @@ onUnmounted(async () => {
       </nav>
 
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" @create-query="onCreateQueryFromConnection" />
-      <Canvas ref="canvasRef" />
+      <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
 
       <!-- Help button + panel -->

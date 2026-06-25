@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -21,8 +23,12 @@ You have tools to explore data and build the user's canvas autonomously:
 - add_chart_node — pin a named visualization, optionally sourced from an existing query node via source_id
 - add_markdown_node — pin a markdown note or summary to the canvas
 - import_file — import a local CSV/Parquet/JSON file into DuckDB and add a table node
+- import_csv_data — load raw CSV text you generate directly into DuckDB; no file on disk needed
+- import_url — fetch a remote CSV/Parquet/JSON by URL into DuckDB; download is server-side so CORS is not a concern
 - clear_canvas — remove all nodes from the canvas (use before a full rebuild)
 - fit_view — adjust the canvas viewport: mode="fit" zooms to show all content, mode="reset" sets zoom to 100%
+- focus_node — pan and zoom the viewport to centre on a specific node; use after adding nodes to direct the user's attention
+- update_query_node — overwrite the SQL (and optionally rename) an existing query node by id; avoids delete-and-recreate when only the query changes
 
 ## Workflow
 1. Always call list_tables first so you know what's available.
@@ -87,6 +93,9 @@ type CanvasAction struct {
 	HasPosition bool    `json:"hasPosition,omitempty"`
 	X           float64 `json:"x,omitempty"`
 	Y           float64 `json:"y,omitempty"`
+	// Explicit size — used by resize_node and move_node tools.
+	Width  float64 `json:"width,omitempty"`
+	Height float64 `json:"height,omitempty"`
 }
 
 type AIResponse struct {
@@ -202,6 +211,10 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		return fmt.Sprintf("Added markdown node name=%q id=%q", n, id)
 	case "import_file":
 		return a.toolImportFile(input, actions)
+	case "import_csv_data":
+		return a.toolImportCSVData(input, actions)
+	case "import_url":
+		return a.toolImportURL(input, actions)
 	case "clear_canvas":
 		if a.persist != nil {
 			a.persist.saveCanvasState("[]") //nolint:errcheck
@@ -210,6 +223,43 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		a.mcpNodeRegistry.Range(func(k, _ any) bool { a.mcpNodeRegistry.Delete(k); return true })
 		*actions = append(*actions, CanvasAction{Type: "clear", Name: ""})
 		return "Canvas cleared."
+	case "resize_node":
+		id, _ := input["node_id"].(string)
+		w, _ := input["width"].(float64)
+		h, _ := input["height"].(float64)
+		if id == "" {
+			return "error: node_id is required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "resize_node", NodeID: id, Width: w, Height: h})
+		return fmt.Sprintf("Resized node %q to %gx%g", id, w, h)
+	case "move_node":
+		id, _ := input["node_id"].(string)
+		x, _ := input["x"].(float64)
+		y, _ := input["y"].(float64)
+		if id == "" {
+			return "error: node_id is required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "move_node", NodeID: id, X: x, Y: y})
+		return fmt.Sprintf("Moved node %q to (%g, %g)", id, x, y)
+	case "focus_node":
+		id, _ := input["node_id"].(string)
+		if id == "" {
+			return "error: node_id is required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "focus_node", NodeID: id})
+		return fmt.Sprintf("Focused node %q", id)
+	case "update_query_node":
+		id, _ := input["node_id"].(string)
+		sql, _ := input["sql"].(string)
+		name, _ := input["name"].(string)
+		if id == "" || sql == "" {
+			return "error: node_id and sql are required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "update_query", NodeID: id, SQL: sql, Name: name})
+		if name != "" {
+			return fmt.Sprintf("Updated query node %q: new SQL and renamed to %q", id, name)
+		}
+		return fmt.Sprintf("Updated query node %q with new SQL", id)
 	case "fit_view":
 		mode, _ := input["mode"].(string)
 		if mode == "" {
@@ -231,17 +281,123 @@ func (a *App) toolImportFile(input map[string]any, actions *[]CanvasAction) stri
 	if path == "" || tableName == "" {
 		return "error: path and table_name are required"
 	}
-	// Drop first so re-importing the same file (e.g., test reruns) is idempotent.
 	safe := escapeDoubleQuote(tableName)
 	a.duck.ExecContext(a.ctx, fmt.Sprintf(`DROP TABLE IF EXISTS "%s"`, safe)) //nolint:errcheck
 	if err := a.ImportFromPath(path, tableName); err != nil {
 		return "error importing file: " + err.Error()
 	}
-	if err := a.SaveTableData(tableName); err != nil {
-		// non-fatal — file imported into DuckDB but won't survive restart
-		fmt.Printf("mcp import_file: SaveTableData failed: %v\n", err)
+	return a.toolFinishImport(tableName, "import_file", actions)
+}
+
+// validateCSVColumns checks that every data row has the same number of fields
+// as the header. Returns a non-empty error string if a mismatch is found.
+func validateCSVColumns(csvText string) string {
+	r := csv.NewReader(strings.NewReader(csvText))
+	r.FieldsPerRecord = -1 // don't enforce uniformity; we check manually
+	r.LazyQuotes = true
+
+	var headerCols int
+	row := 0
+	for {
+		record, err := r.Read()
+		if err != nil {
+			break // EOF or unrecoverable parse error — let DuckDB surface the details
+		}
+		if row == 0 {
+			headerCols = len(record)
+			row++
+			continue
+		}
+		if len(record) != headerCols {
+			return fmt.Sprintf(
+				"error: CSV column count mismatch — header has %d columns but row %d has %d columns. "+
+					"Verify that every data row includes a value for each header field (missing or extra commas are the usual cause).",
+				headerCols, row+1, len(record),
+			)
+		}
+		row++
+	}
+	return ""
+}
+
+func (a *App) toolImportCSVData(input map[string]any, actions *[]CanvasAction) string {
+	csvText, _ := input["csv_text"].(string)
+	tableName, _ := input["table_name"].(string)
+	if csvText == "" || tableName == "" {
+		return "error: csv_text and table_name are required"
 	}
 
+	// Normalize line endings — Claude sometimes generates \r\n or bare \r.
+	csvText = strings.ReplaceAll(csvText, "\r\n", "\n")
+	csvText = strings.ReplaceAll(csvText, "\r", "\n")
+
+	// Validate column count consistency before handing to DuckDB.
+	// A mismatched header/data count causes a silent failure — catch it here
+	// and return an actionable error so the caller can fix the CSV.
+	if msg := validateCSVColumns(csvText); msg != "" {
+		return msg
+	}
+
+	tmp, err := os.CreateTemp("", "sqgarden_mcp_*.csv")
+	if err != nil {
+		return "error creating temp file: " + err.Error()
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.WriteString(csvText); err != nil {
+		tmp.Close()
+		return "error writing CSV data: " + err.Error()
+	}
+	tmp.Close()
+
+	safe := escapeDoubleQuote(tableName)
+	safePath := escapeSingleQuote(tmpPath)
+	a.duck.ExecContext(a.ctx, fmt.Sprintf(`DROP TABLE IF EXISTS "%s"`, safe)) //nolint:errcheck
+
+	// Explicitly set delimiter and header to avoid auto-detect failures on
+	// small or uniform-looking generated CSV (where DuckDB may misidentify the
+	// delimiter or treat the header row as data).
+	_, err = a.duck.ExecContext(a.ctx, fmt.Sprintf(
+		`CREATE TABLE "%s" AS SELECT * FROM read_csv_auto('%s', header=true, delim=',')`,
+		safe, safePath,
+	))
+	if err != nil {
+		// Fallback: disable type inference (same pattern as ImportFromPath).
+		_, err = a.duck.ExecContext(a.ctx, fmt.Sprintf(
+			`CREATE TABLE "%s" AS SELECT * FROM read_csv_auto('%s', all_varchar=true)`,
+			safe, safePath,
+		))
+		if err != nil {
+			return "error importing CSV: " + err.Error()
+		}
+	}
+	return a.toolFinishImport(tableName, "import_csv_data", actions)
+}
+
+func (a *App) toolImportURL(input map[string]any, actions *[]CanvasAction) string {
+	rawURL, _ := input["url"].(string)
+	tableName, _ := input["table_name"].(string)
+	if rawURL == "" || tableName == "" {
+		return "error: url and table_name are required"
+	}
+
+	safe := escapeDoubleQuote(tableName)
+	a.duck.ExecContext(a.ctx, fmt.Sprintf(`DROP TABLE IF EXISTS "%s"`, safe)) //nolint:errcheck
+	if err := a.ImportFromUrl(rawURL, tableName); err != nil {
+		return "error importing URL: " + err.Error()
+	}
+	return a.toolFinishImport(tableName, "import_url", actions)
+}
+
+// toolFinishImport handles the shared post-import steps: persist, read schema,
+// count rows, and emit a canvas table action.
+func (a *App) toolFinishImport(tableName, toolName string, actions *[]CanvasAction) string {
+	if err := a.SaveTableData(tableName); err != nil {
+		fmt.Printf("mcp %s: SaveTableData failed: %v\n", toolName, err)
+	}
+
+	safe := escapeDoubleQuote(tableName)
 	cols, err := a.GetTableInfo(tableName)
 	if err != nil {
 		return fmt.Sprintf("imported %q but couldn't read schema: %v", tableName, err)
@@ -475,6 +631,54 @@ var anthropicTools = []map[string]any{
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB"},
 			},
 			"required": []string{"path", "table_name"},
+		},
+	},
+	{
+		"name":        "import_csv_data",
+		"description": "Load raw CSV text directly into DuckDB as a table and add it as a canvas node. Use this when you have generated or transformed data as a string — no file on disk needed.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"csv_text":   map[string]any{"type": "string", "description": "Full CSV content including header row"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"csv_text", "table_name"},
+		},
+	},
+	{
+		"name":        "import_url",
+		"description": "Fetch a remote CSV, Parquet, or JSON file by URL, load it into DuckDB, and add it as a canvas node. The download happens server-side so CORS is not a concern.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url":        map[string]any{"type": "string", "description": "Public URL to the data file (CSV, Parquet, JSON, JSONL)"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"url", "table_name"},
+		},
+	},
+	{
+		"name":        "focus_node",
+		"description": "Pan and zoom the canvas viewport to centre on a specific node. Call after adding nodes to direct the user's attention to the most important result.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to focus (from add_query_node, add_chart_node, or list_canvas_nodes)"},
+			},
+			"required": []string{"node_id"},
+		},
+	},
+	{
+		"name":        "update_query_node",
+		"description": "Overwrite the SQL of an existing query node and optionally rename it. Use this instead of deleting and recreating when only the query needs to change.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the query node to update"},
+				"sql":     map[string]any{"type": "string", "description": "New SQL query"},
+				"name":    map[string]any{"type": "string", "description": "Optional new display name for the node"},
+			},
+			"required": []string{"node_id", "sql"},
 		},
 	},
 	{

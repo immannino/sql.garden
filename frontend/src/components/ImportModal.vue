@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useDuckDB } from '../composables/useDuckDB'
 import { useSchemaStore } from '../stores/schema'
 import { usePersistence } from '../composables/usePersistence'
+import { useImportHistory } from '../composables/useImportHistory'
 import { IS_DESKTOP } from '../lib/env'
 
 const props = defineProps<{
@@ -15,9 +16,10 @@ const emit = defineEmits<{ close: []; created: [tableName: string] }>()
 const { exec, query, getTableInfo, loadExtension, importFromPath, importFromUrl, importSqliteFromPath, registerFile, dropFile } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { saveTable } = usePersistence()
+const { entries: historyEntries, push: pushHistory, remove: removeHistory, clear: clearHistory } = useImportHistory()
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
-const activeTab = ref<'files' | 'paste'>(props.initialTab ?? 'files')
+const activeTab = ref<'files' | 'paste' | 'recent'>(props.initialTab ?? 'files')
 
 // ── File import types ─────────────────────────────────────────────────────────
 type Status = 'queued' | 'processing' | 'done' | 'error'
@@ -111,8 +113,12 @@ async function addTableToCanvas(tableName: string): Promise<number> {
 
 async function processPathItem(item: PathImportItem) {
   item.status = 'processing'
-  try { await importFromPath(item.filePath, item.tableName); item.rowCount = await addTableToCanvas(item.tableName); item.status = 'done' }
-  catch (e) { item.status = 'error'; item.error = e instanceof Error ? e.message : String(e) }
+  try {
+    await importFromPath(item.filePath, item.tableName)
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
+    pushHistory({ fileName: item.displayName, filePath: item.filePath, tableName: item.tableName, rowCount: item.rowCount })
+  } catch (e) { item.status = 'error'; item.error = e instanceof Error ? e.message : String(e) }
 }
 async function processUrlItem(item: UrlImportItem) {
   item.status = 'processing'
@@ -129,7 +135,10 @@ async function processUrlItem(item: UrlImportItem) {
       const safeTable = item.tableName.replace(/"/g, '""')
       await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFn}`)
     }
-    item.rowCount = await addTableToCanvas(item.tableName); item.status = 'done'
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
+    const displayUrl = item.url.length > 60 ? item.url.slice(0, 57) + '…' : item.url
+    pushHistory({ fileName: displayUrl, url: item.url, tableName: item.tableName, rowCount: item.rowCount })
   } catch (e) { item.status = 'error'; item.error = e instanceof Error ? e.message : String(e) }
 }
 async function processDbItem(item: DbImportItem) {
@@ -156,7 +165,9 @@ async function processFileItem(item: FileImportItem) {
     await exec(`DROP TABLE IF EXISTS "${safeTable}"`)
     await exec(`CREATE TABLE "${safeTable}" AS SELECT * FROM ${readFn}`)
     await dropFile(fname)
-    item.rowCount = await addTableToCanvas(item.tableName); item.status = 'done'
+    item.rowCount = await addTableToCanvas(item.tableName)
+    item.status = 'done'
+    pushHistory({ fileName: item.file.name, tableName: item.tableName, rowCount: item.rowCount })
   } catch (e) { item.status = 'error'; item.error = e instanceof Error ? e.message : String(e) }
 }
 
@@ -389,6 +400,27 @@ function itemStatusClass(item: ImportItem): string {
   return item.status
 }
 function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' rows') }
+
+function fmtRelTime(ts: number): string {
+  const diff = Date.now() - ts
+  if (diff < 60_000) return 'just now'
+  if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`
+  if (diff < 2_592_000_000) return `${Math.round(diff / 86_400_000)}d ago`
+  return new Date(ts).toLocaleDateString()
+}
+
+function reImport(entry: (typeof historyEntries.value)[number]) {
+  if (entry.filePath) {
+    enqueuePaths([entry.filePath])
+    activeTab.value = 'files'
+  } else if (entry.url) {
+    urlInput.value = entry.url
+    urlTableName.value = uniqueName(entry.tableName)
+    urlNameUserEdited.value = true
+    activeTab.value = 'files'
+  }
+}
 </script>
 
 <template>
@@ -426,6 +458,14 @@ function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' 
             <line x1="4" y1="9"    x2="8"  y2="9"    stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
           Paste
+        </button>
+        <button class="tab" :class="{ active: activeTab === 'recent' }" @click="activeTab = 'recent'">
+          <svg viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M7 4v3.5l2 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Recent
+          <span v-if="historyEntries.length" class="tab-count">{{ historyEntries.length }}</span>
         </button>
       </div>
 
@@ -524,6 +564,73 @@ function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' 
         </div>
       </template>
 
+      <!-- ── Recent tab ───────────────────────────────────────────────────────── -->
+      <template v-else-if="activeTab === 'recent'">
+        <div class="recent-tab">
+          <div v-if="!historyEntries.length" class="recent-empty">
+            <svg viewBox="0 0 32 32" fill="none">
+              <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M16 9v7.5l4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            No imports yet — imported files will appear here
+          </div>
+          <template v-else>
+            <div class="recent-header">
+              <span class="recent-count">{{ historyEntries.length }} import{{ historyEntries.length !== 1 ? 's' : '' }}</span>
+              <button class="recent-clear-btn" @click="clearHistory">Clear all</button>
+            </div>
+            <div class="recent-list">
+              <div v-for="entry in historyEntries" :key="entry.id" class="recent-entry">
+                <div class="recent-source-icon">
+                  <!-- URL icon -->
+                  <svg v-if="entry.url" viewBox="0 0 14 14" fill="none">
+                    <circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M1.5 7h11M7 1.5C5.8 3 5 5 5 7s.8 4 2 5.5M7 1.5C8.2 3 9 5 9 7s-.8 4-2 5.5" stroke="currentColor" stroke-width="1.2"/>
+                  </svg>
+                  <!-- File icon -->
+                  <svg v-else viewBox="0 0 14 14" fill="none">
+                    <path d="M2 2a1 1 0 011-1h5l4 4v7a1 1 0 01-1 1H3a1 1 0 01-1-1V2z" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M8 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <div class="recent-info">
+                  <div class="recent-names">
+                    <span class="recent-filename" :title="entry.filePath ?? entry.url ?? entry.fileName">{{ entry.fileName }}</span>
+                    <span class="recent-arrow">→</span>
+                    <span class="recent-tablename">{{ entry.tableName }}</span>
+                  </div>
+                  <div class="recent-meta">
+                    <span class="recent-rows">{{ fmtRows(entry.rowCount) }}</span>
+                    <span class="recent-dot">·</span>
+                    <span class="recent-time">{{ fmtRelTime(entry.importedAt) }}</span>
+                    <span v-if="!entry.filePath && !entry.url" class="recent-no-reimport">(no re-import — web file)</span>
+                  </div>
+                </div>
+                <div class="recent-actions">
+                  <button
+                    v-if="entry.filePath || entry.url"
+                    class="recent-reimport-btn"
+                    :title="entry.filePath ? `Re-import from ${entry.filePath}` : `Re-import from URL`"
+                    @click="reImport(entry)"
+                  >
+                    <svg viewBox="0 0 12 12" fill="none">
+                      <path d="M1 6A5 5 0 1 1 4 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                      <polyline points="1,1 1,4 4,4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Re-import
+                  </button>
+                  <button class="recent-remove-btn" title="Remove from history" @click="removeHistory(entry.id)">
+                    <svg viewBox="0 0 10 10" fill="none">
+                      <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+
       <!-- ── Paste tab ───────────────────────────────────────────────────────── -->
       <template v-else>
         <div class="paste-tab">
@@ -594,6 +701,11 @@ function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' 
           <span v-else class="settle-summary hint">DuckDB will auto-detect column types</span>
           <button v-if="!allSettled" class="footer-btn secondary" :disabled="isProcessing" @click="emit('close')">Cancel</button>
           <button v-else class="footer-btn primary" @click="emit('close')">Done</button>
+        </template>
+
+        <template v-else-if="activeTab === 'recent'">
+          <span class="settle-summary hint">Click Re-import to load a previous file</span>
+          <button class="footer-btn secondary" @click="emit('close')">Close</button>
         </template>
 
         <template v-else>
@@ -688,6 +800,88 @@ function fmtRows(n: number) { return n.toLocaleString() + (n === 1 ? ' row' : ' 
   position: absolute; bottom: -1px; left: 0; right: 0; height: 1px;
   background: var(--surface-1);
 }
+
+.tab-count {
+  font-size: 9px; font-weight: 700;
+  padding: 1px 4px; border-radius: 8px;
+  background: var(--surface-2); color: var(--text-muted);
+}
+.tab.active .tab-count { background: rgba(88,166,255,0.12); color: var(--accent); }
+
+/* ── Recent tab ──────────────────────────────────────────────────────────── */
+.recent-tab { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+.recent-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--text-muted); font-size: 12px; font-style: italic; padding: 32px;
+  text-align: center;
+}
+.recent-empty svg { width: 32px; height: 32px; opacity: 0.3; }
+
+.recent-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.recent-count { font-size: 10.5px; color: var(--text-muted); }
+.recent-clear-btn {
+  font-size: 10.5px; color: var(--text-muted); background: none; border: none;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: color 0.12s, background 0.12s;
+}
+.recent-clear-btn:hover { color: var(--error); background: rgba(248,81,73,0.08); }
+
+.recent-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+.recent-entry {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+.recent-entry:last-child { border-bottom: none; }
+.recent-entry:hover { background: var(--surface-2); }
+.recent-entry:hover .recent-reimport-btn { opacity: 1; }
+.recent-entry:hover .recent-remove-btn { opacity: 1; }
+
+.recent-source-icon { flex-shrink: 0; color: var(--text-muted); }
+.recent-source-icon svg { width: 14px; height: 14px; display: block; }
+
+.recent-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.recent-names { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.recent-filename {
+  font-size: 11.5px; color: var(--text-primary); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+}
+.recent-arrow { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.recent-tablename { font-size: 11px; color: var(--accent); font-family: var(--font-mono); flex-shrink: 0; }
+
+.recent-meta { display: flex; align-items: center; gap: 4px; }
+.recent-rows { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); }
+.recent-dot { font-size: 10px; color: var(--border); }
+.recent-time { font-size: 10px; color: var(--text-muted); }
+.recent-no-reimport { font-size: 9.5px; color: var(--text-muted); font-style: italic; margin-left: 2px; }
+
+.recent-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+.recent-reimport-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; font-size: 10.5px; font-weight: 600;
+  background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3);
+  border-radius: 4px; color: var(--accent); cursor: pointer;
+  opacity: 0; transition: opacity 0.12s, background 0.12s;
+}
+.recent-reimport-btn svg { width: 10px; height: 10px; }
+.recent-reimport-btn:hover { background: rgba(88,166,255,0.2); }
+
+.recent-remove-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 3px;
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; opacity: 0; transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+.recent-remove-btn svg { width: 9px; height: 9px; }
+.recent-remove-btn:hover { color: var(--error); background: rgba(248,81,73,0.1); }
 
 /* ── Drop zone ───────────────────────────────────────────────────────────── */
 .drop-zone {

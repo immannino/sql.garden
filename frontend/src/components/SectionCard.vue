@@ -11,6 +11,7 @@ const props = defineProps<{ node: SectionNode; selected?: boolean }>()
 const emit = defineEmits<{
   dragStart: [{ id: string; mouseX: number; mouseY: number; shiftKey: boolean }]
   resizeStart: [{ id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }]
+  mosaicContents: [id: string]
 }>()
 
 const schemaStore = useSchemaStore()
@@ -24,21 +25,6 @@ function onMouseDown(e: MouseEvent) {
 function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
   e.stopPropagation()
   emit('resizeStart', { id: props.node.id, mouseX: e.clientX, mouseY: e.clientY, startW: props.node.w, startH: props.node.h, direction })
-}
-
-// ── Delete ────────────────────────────────────────────────────────────────────
-const deleteConfirm = ref(false)
-let deleteTimer: ReturnType<typeof setTimeout> | null = null
-
-function onDeleteClick(e: MouseEvent) {
-  e.stopPropagation()
-  if (!deleteConfirm.value) {
-    deleteConfirm.value = true
-    deleteTimer = setTimeout(() => { deleteConfirm.value = false }, 3000)
-  } else {
-    if (deleteTimer) clearTimeout(deleteTimer)
-    schemaStore.removeNode(props.node.id)
-  }
 }
 
 // ── Rename ────────────────────────────────────────────────────────────────────
@@ -69,6 +55,7 @@ function onRenameKey(e: KeyboardEvent) {
   <div
     class="section-card"
     :class="{ selected }"
+    :data-node-id="node.id"
     @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
     :style="{
       left: `${node.x}px`,
@@ -79,7 +66,7 @@ function onRenameKey(e: KeyboardEvent) {
     }"
     @mousedown="onMouseDown"
   >
-    <!-- Label bar at top-left -->
+    <!-- Label tab — sits above the top border -->
     <div class="section-label-bar" @mousedown.stop>
       <input
         v-if="isRenaming"
@@ -94,24 +81,33 @@ function onRenameKey(e: KeyboardEvent) {
         v-else
         class="section-label"
         title="Double-click to rename"
-        @dblclick="startRename"
+        @dblclick.stop="startRename"
       >{{ node.name }}</span>
 
-      <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
-
-      <button
-        class="section-delete-btn"
-        :class="{ confirming: deleteConfirm }"
-        :title="deleteConfirm ? 'Click again to delete' : 'Delete section'"
-        @click.stop="onDeleteClick"
-      >
-        <span v-if="deleteConfirm" style="font-size:9px;font-weight:700;white-space:nowrap">Delete?</span>
-        <svg v-else viewBox="0 0 12 12" fill="none" style="width:10px;height:10px">
-          <path d="M2 3.5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-          <path d="M4.5 3.5V2.5h3v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M3.5 3.5l.7 6h3.6l.7-6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
+      <div class="section-label-actions">
+        <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
+        <button
+          class="section-icon-btn"
+          title="Mosaic contents"
+          @click.stop="emit('mosaicContents', node.id)"
+        >
+          <svg viewBox="0 0 12 12" fill="none">
+            <rect x="1" y="1" width="4" height="4" rx="0.8" fill="currentColor" opacity="0.9"/>
+            <rect x="7" y="1" width="4" height="4" rx="0.8" fill="currentColor" opacity="0.6"/>
+            <rect x="1" y="7" width="4" height="4" rx="0.8" fill="currentColor" opacity="0.6"/>
+            <rect x="7" y="7" width="4" height="4" rx="0.8" fill="currentColor" opacity="0.9"/>
+          </svg>
+        </button>
+        <button
+          class="section-icon-btn section-delete-btn"
+          title="Delete section"
+          @click.stop="schemaStore.removeNode(node.id)"
+        >
+          <svg viewBox="0 0 12 12" fill="none">
+            <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Resize handles -->
@@ -129,39 +125,39 @@ function onRenameKey(e: KeyboardEvent) {
 <style scoped>
 .section-card {
   position: absolute;
-  border: 2px solid var(--section-color, #6366f1);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--section-color, #6366f1) 6%, transparent);
+  border: 1.5px solid var(--section-color, #6366f1);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--section-color, #6366f1) 5%, transparent);
   cursor: grab;
   user-select: none;
-  /* Always behind other canvas nodes */
   z-index: 0;
-  transition: border-color 0.15s;
+  /* The label tab sits above the border box — overflow:visible lets it render outside */
+  overflow: visible;
 }
 
 .section-card:active { cursor: grabbing; }
 
 .section-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.25);
 }
 
-/* Label bar */
+/* Label pill — inside the section, top-left corner */
 .section-label-bar {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   position: absolute;
-  top: -1px;
-  left: 12px;
+  top: 8px;
+  left: 8px;
   height: 22px;
+  min-width: 40px;
+  max-width: calc(100% - 16px);
   background: var(--section-color, #6366f1);
-  border-radius: 0 0 6px 6px;
-  padding: 0 8px 0 10px;
+  border-radius: 6px;
+  padding: 0 6px 0 10px;
   cursor: default;
 }
-
-.section-label-bar:hover :deep(.ncp-trigger) { opacity: 0.7; }
 
 .section-label {
   font-size: 11px;
@@ -170,7 +166,8 @@ function onRenameKey(e: KeyboardEvent) {
   letter-spacing: 0.03em;
   white-space: nowrap;
   cursor: text;
-  max-width: 200px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -185,42 +182,47 @@ function onRenameKey(e: KeyboardEvent) {
   border-radius: 3px;
   padding: 1px 4px;
   outline: none;
-  width: 120px;
+  flex: 1;
+  min-width: 80px;
 }
 
-.section-delete-btn {
+.section-label-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.section-label-bar:hover .section-label-actions { opacity: 1; }
+
+.section-icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  width: 18px;
   height: 18px;
-  background: transparent;
   border: none;
   border-radius: 3px;
-  color: rgba(255,255,255,0.6);
+  background: transparent;
+  color: rgba(255,255,255,0.75);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-  padding: 0 3px;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
 }
-
-.section-label-bar:hover .section-delete-btn { opacity: 1; }
-.section-delete-btn.confirming {
-  opacity: 1;
-  background: rgba(248,81,73,0.4);
-  color: #fff;
-}
-.section-delete-btn:hover { background: rgba(248,81,73,0.3); color: #fff; opacity: 1; }
+.section-icon-btn svg { width: 10px; height: 10px; }
+.section-icon-btn:hover { background: rgba(0,0,0,0.2); color: #fff; }
+.section-delete-btn:hover { background: rgba(248,81,73,0.5); color: #fff; }
 
 /* Resize handles */
 .rh-e, .rh-s, .rh-se { position: absolute; opacity: 0; transition: opacity 0.15s; }
 
 .rh-e {
-  right: -4px; top: 24px; bottom: 16px; width: 8px;
+  right: -5px; top: 12px; bottom: 12px; width: 10px;
   cursor: ew-resize;
 }
 .rh-s {
-  bottom: -4px; left: 16px; right: 16px; height: 8px;
+  bottom: -5px; left: 12px; right: 12px; height: 10px;
   cursor: ns-resize;
 }
 .rh-se {
@@ -228,7 +230,7 @@ function onRenameKey(e: KeyboardEvent) {
   cursor: se-resize;
   display: flex; align-items: center; justify-content: center;
   color: var(--section-color, #6366f1);
-  border-radius: 0 0 10px 0;
+  border-radius: 0 0 8px 0;
 }
 .rh-se svg { width: 8px; height: 8px; }
 

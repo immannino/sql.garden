@@ -358,6 +358,80 @@ var mcpToolDefs = []map[string]any{
 		},
 	},
 	{
+		"name":        "import_csv_data",
+		"description": "Load raw CSV text directly into DuckDB as a table and add it as a canvas node. Use this when you have generated or transformed data as a string — no file on disk needed.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"csv_text":   map[string]any{"type": "string", "description": "Full CSV content including header row"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"csv_text", "table_name"},
+		},
+	},
+	{
+		"name":        "import_url",
+		"description": "Fetch a remote CSV, Parquet, or JSON file by URL, load it into DuckDB, and add it as a canvas node. The download happens server-side so CORS is not a concern.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url":        map[string]any{"type": "string", "description": "Public URL to the data file (CSV, Parquet, JSON, JSONL)"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"url", "table_name"},
+		},
+	},
+	{
+		"name":        "resize_node",
+		"description": "Set the width and height of an existing canvas node. Use node ids returned by add_query_node, add_chart_node, or list_canvas_nodes.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to resize"},
+				"width":   map[string]any{"type": "number", "description": "New width in canvas pixels"},
+				"height":  map[string]any{"type": "number", "description": "New height in canvas pixels (for charts this is the plot area height; for queries this is the results pane height)"},
+			},
+			"required": []string{"node_id", "width", "height"},
+		},
+	},
+	{
+		"name":        "move_node",
+		"description": "Set the canvas position (x, y) of an existing node. Coordinates are in canvas pixels; (0, 0) is the default origin.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to move"},
+				"x":       map[string]any{"type": "number", "description": "Canvas x position"},
+				"y":       map[string]any{"type": "number", "description": "Canvas y position"},
+			},
+			"required": []string{"node_id", "x", "y"},
+		},
+	},
+	{
+		"name":        "focus_node",
+		"description": "Pan and zoom the canvas viewport to centre on a specific node. Call after adding nodes to direct the user's attention to the most important result.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to focus (from add_query_node, add_chart_node, or list_canvas_nodes)"},
+			},
+			"required": []string{"node_id"},
+		},
+	},
+	{
+		"name":        "update_query_node",
+		"description": "Overwrite the SQL of an existing query node and optionally rename it. Use instead of delete-and-recreate when only the query needs to change.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the query node to update"},
+				"sql":     map[string]any{"type": "string", "description": "New SQL query"},
+				"name":    map[string]any{"type": "string", "description": "Optional new display name for the node"},
+			},
+			"required": []string{"node_id", "sql"},
+		},
+	},
+	{
 		"name":        "clear_canvas",
 		"description": "Remove all nodes from the canvas. Use before a full rebuild to avoid duplicates.",
 		"inputSchema": map[string]any{

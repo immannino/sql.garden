@@ -108,6 +108,7 @@ function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
   <div
     class="markdown-card"
     :class="{ selected, editing: isEditing }"
+    :data-node-id="node.id"
     :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 300}px` }"
     @mousedown="onMouseDown"
     @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
