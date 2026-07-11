@@ -99,12 +99,12 @@ jobs:
           security import "$CERT_PATH" -k "$KEYCHAIN_PATH" \
             -P "$APPLE_DEVELOPER_CERTIFICATE_PASSWORD" \
             -T /usr/bin/codesign
-          # Keep the login keychain in the search list so system tools still work
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
           echo "Available signing identities:"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning
 
       - name: Sign app bundle
         if: env.APPLE_DEVELOPER_ID != ''
