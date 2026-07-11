@@ -110,6 +110,7 @@ jobs:
           codesign --deep --force --verify --verbose \
             --sign "$APPLE_DEVELOPER_ID" \
             --options runtime \
+            --timestamp \
             --entitlements build/darwin/entitlements.plist \
             build/bin/sql.garden.app
 
