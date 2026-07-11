@@ -14,6 +14,7 @@ import {
   GetDatabaseSchemas,
   GetSchemaTables,
   GetTableColumns,
+  ListS3Objects,
 } from '../../wailsjs/go/main/App'
 import type { main } from '../../wailsjs/go/models'
 
@@ -85,7 +86,11 @@ function onDragEnd() {
 
 // ── Connections tab ───────────────────────────────────────────────────────────
 
-type ConnType = 'postgres' | 'sqlite' | 'duckdb' | 'mysql'
+type ConnType = 'postgres' | 'sqlite' | 'duckdb' | 'mysql' | 's3'
+
+interface S3FormConfig {
+  bucket: string; prefix: string; key: string; secret: string; region: string; endpoint: string
+}
 
 // ── Explorer types ────────────────────────────────────────────────────────────
 
@@ -93,12 +98,34 @@ interface ExplorerCol   { name: string; type: string; nullable: boolean }
 interface ExplorerTable { name: string; kind: string; open: boolean; cols: ExplorerCol[] | null; loading: boolean }
 interface ExplorerSchema { name: string; open: boolean; tables: ExplorerTable[] | null; loading: boolean }
 interface ExplorerState { schemas: ExplorerSchema[] | null; loading: boolean; error: string }
+interface S3ExplorerState { files: main.S3Object[] | null; loading: boolean; error: string; search: string; sortBy: 'name' | 'date' }
+
+const sidebarWidth = ref(240)
+const isResizing = ref(false)
+
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  isResizing.value = true
+  const startX = e.clientX
+  const startW = sidebarWidth.value
+  function onMove(ev: MouseEvent) {
+    sidebarWidth.value = Math.max(160, Math.min(560, startW + ev.clientX - startX))
+  }
+  function onUp() {
+    isResizing.value = false
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 
 const activeTab = ref<'layers' | 'connections'>('layers')
 const connections = ref<main.ConnectionRecord[]>([])
 const connectedIds = ref(new Set<string>())
 const connectedAliases = reactive<Record<string, string>>({})
 const explorer = reactive<Record<string, ExplorerState>>({})
+const s3Explorer = reactive<Record<string, S3ExplorerState>>({})
 const connectingId = ref<string | null>(null)
 const connectErrors = reactive<Record<string, string>>({})
 const showForm = ref(false)
@@ -108,12 +135,17 @@ const emptyForm = (): { name: string; type: ConnType; dsn: string; readOnly: boo
   name: '', type: 'postgres', dsn: '', readOnly: true,
 })
 const form = ref(emptyForm())
+const emptyS3Config = (): S3FormConfig => ({
+  bucket: '', prefix: '', key: '', secret: '', region: 'us-east-1', endpoint: '',
+})
+const s3Config = ref(emptyS3Config())
 
 const TYPE_LABELS: Record<ConnType, string> = {
   postgres: 'PostgreSQL',
   sqlite: 'SQLite',
   duckdb: 'DuckDB File',
   mysql: 'MySQL',
+  s3: 'Amazon S3 / R2',
 }
 
 const TYPE_BADGE: Record<ConnType, string> = {
@@ -121,6 +153,7 @@ const TYPE_BADGE: Record<ConnType, string> = {
   sqlite: 'SL',
   duckdb: 'DK',
   mysql: 'MY',
+  s3: 'S3',
 }
 
 const DSN_PLACEHOLDER: Record<ConnType, string> = {
@@ -128,6 +161,7 @@ const DSN_PLACEHOLDER: Record<ConnType, string> = {
   sqlite:   '/path/to/database.db',
   duckdb:   '/path/to/database.duckdb',
   mysql:    'mysql://user:pass@host:3306/dbname',
+  s3:       '',
 }
 
 const URL_SCHEME_TO_TYPE: Partial<Record<string, ConnType>> = {
@@ -138,6 +172,7 @@ const URL_SCHEME_TO_TYPE: Partial<Record<string, ConnType>> = {
 }
 
 const isFileBased = computed(() => form.value.type === 'sqlite' || form.value.type === 'duckdb')
+const isS3Form = computed(() => form.value.type === 's3')
 
 function onDsnInput() {
   const val = form.value.dsn.trim()
@@ -169,6 +204,7 @@ async function browseFile() {
 
 function openForm() {
   form.value = emptyForm()
+  s3Config.value = emptyS3Config()
   formError.value = ''
   showForm.value = true
 }
@@ -181,9 +217,23 @@ function cancelForm() {
 async function submitForm() {
   formError.value = ''
   const name = form.value.name.trim()
-  const dsn  = form.value.dsn.trim()
   if (!name) { formError.value = 'Name is required'; return }
-  if (!dsn)  { formError.value = 'DSN / path is required'; return }
+
+  let dsn: string
+  if (form.value.type === 's3') {
+    if (!s3Config.value.bucket.trim()) { formError.value = 'Bucket name is required'; return }
+    dsn = JSON.stringify({
+      bucket:   s3Config.value.bucket.trim(),
+      prefix:   s3Config.value.prefix.trim(),
+      key:      s3Config.value.key.trim(),
+      secret:   s3Config.value.secret.trim(),
+      region:   s3Config.value.region.trim() || 'us-east-1',
+      endpoint: s3Config.value.endpoint.trim(),
+    })
+  } else {
+    dsn = form.value.dsn.trim()
+    if (!dsn) { formError.value = 'DSN / path is required'; return }
+  }
 
   try {
     const saved = await SaveConnection({
@@ -202,6 +252,7 @@ async function removeConnection(id: string) {
     connectedIds.value.delete(id)
     delete connectedAliases[id]
     delete explorer[id]
+    delete s3Explorer[id]
   }
   delete connectErrors[id]
   await DeleteConnection(id)
@@ -217,18 +268,23 @@ async function toggleConnect(conn: main.ConnectionRecord) {
       connectedIds.value.delete(conn.id)
       delete connectedAliases[conn.id]
       delete explorer[conn.id]
+      delete s3Explorer[conn.id]
     } else {
       const alias = await ConnectSaved(conn.id)
       connectedIds.value.add(conn.id)
       connectedAliases[conn.id] = alias
-      await loadSchemas(conn.id, alias)
+      if (conn.type === 's3') {
+        await loadS3Files(conn.id)
+      } else {
+        await loadSchemas(conn.id, alias)
+      }
     }
   } catch (e) {
     connectErrors[conn.id] = e instanceof Error ? e.message : String(e)
-    // Roll back optimistic state if connect failed
     connectedIds.value.delete(conn.id)
     delete connectedAliases[conn.id]
     delete explorer[conn.id]
+    delete s3Explorer[conn.id]
   } finally {
     connectingId.value = null
   }
@@ -246,6 +302,50 @@ async function loadSchemas(connId: string, alias: string) {
   } finally {
     explorer[connId].loading = false
   }
+}
+
+async function loadS3Files(connId: string) {
+  const prev = s3Explorer[connId]
+  s3Explorer[connId] = { files: null, loading: true, error: '', search: prev?.search ?? '', sortBy: prev?.sortBy ?? 'name' }
+  try {
+    const raw = await ListS3Objects(connId)
+    s3Explorer[connId].files = raw ?? []
+  } catch (e) {
+    s3Explorer[connId].error = e instanceof Error ? e.message : String(e)
+  } finally {
+    s3Explorer[connId].loading = false
+  }
+}
+
+function filteredS3Files(connId: string): main.S3Object[] {
+  const state = s3Explorer[connId]
+  if (!state?.files) return []
+  const q = state.search.trim().toLowerCase()
+  let files = q ? state.files.filter((f) => f.name.toLowerCase().includes(q) || f.key.toLowerCase().includes(q)) : [...state.files]
+  if (state.sortBy === 'date') {
+    files.sort((a, b) => b.lastModified - a.lastModified)
+  } else {
+    files.sort((a, b) => a.name.localeCompare(b.name))
+  }
+  return files
+}
+
+function formatDate(unix: number): string {
+  if (!unix) return ''
+  const d = new Date(unix * 1000)
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function openS3File(conn: main.ConnectionRecord, file: main.S3Object) {
+  let cfg: { bucket: string } = { bucket: '' }
+  try { cfg = JSON.parse(conn.dsn) } catch { /* use empty bucket */ }
+  const url = `s3://${cfg.bucket}/${file.key}`
+  const readFn = file.ext === '.parquet'
+    ? `read_parquet('${url}')`
+    : (file.ext === '.json' || file.ext === '.jsonl' || file.ext === '.ndjson')
+      ? `read_json_auto('${url}')`
+      : `read_csv_auto('${url}')`
+  emit('createQuery', { name: file.name.replace(/\.[^.]+$/, ''), sql: `SELECT *\nFROM ${readFn}` })
 }
 
 async function toggleSchema(connId: string, schema: ExplorerSchema) {
@@ -292,7 +392,12 @@ onMounted(async () => {
       } else {
         connectedIds.value.add(r.id)
         connectedAliases[r.id] = r.alias
-        loadSchemas(r.id, r.alias) // background — no await
+        const conn = connections.value.find((c) => c.id === r.id)
+        if (conn?.type === 's3') {
+          loadS3Files(r.id) // background — no await
+        } else {
+          loadSchemas(r.id, r.alias) // background — no await
+        }
       }
     }
   } catch (e) {
@@ -302,7 +407,8 @@ onMounted(async () => {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :class="{ resizing: isResizing }" :style="{ width: sidebarWidth + 'px' }">
+    <div class="sidebar-resize-handle" @mousedown="startResize" />
     <!-- Tab header -->
     <div class="sidebar-tabs">
       <button class="tab-btn" :class="{ active: activeTab === 'layers' }" @click="activeTab = 'layers'">Layers</button>
@@ -364,7 +470,7 @@ onMounted(async () => {
       <div v-if="showForm" class="conn-form">
         <div class="form-row">
           <label class="form-label">Name</label>
-          <input v-model="form.name" class="form-input" placeholder="prod_db" @keydown.enter="submitForm" />
+          <input v-model="form.name" class="form-input" placeholder="my_bucket" @keydown.enter="submitForm" />
         </div>
         <div class="form-row">
           <label class="form-label">Type</label>
@@ -372,18 +478,48 @@ onMounted(async () => {
             <option v-for="(label, key) in TYPE_LABELS" :key="key" :value="key">{{ label }}</option>
           </select>
         </div>
-        <div class="form-row">
-          <label class="form-label">{{ isFileBased ? 'File path' : 'Connection string' }}</label>
-          <div v-if="isFileBased" class="dsn-row">
-            <input v-model="form.dsn" class="form-input dsn-input" :placeholder="DSN_PLACEHOLDER[form.type]" @input="onDsnInput" />
-            <button class="browse-btn" title="Browse…" @click="browseFile">…</button>
+        <!-- S3-specific fields -->
+        <template v-if="isS3Form">
+          <div class="form-row">
+            <label class="form-label">Bucket</label>
+            <input v-model="s3Config.bucket" class="form-input" placeholder="my-bucket" />
           </div>
-          <textarea v-else v-model="form.dsn" class="form-input form-textarea" :placeholder="DSN_PLACEHOLDER[form.type]" rows="2" @input="onDsnInput" />
-        </div>
-        <label class="form-checkbox">
-          <input v-model="form.readOnly" type="checkbox" />
-          <span>Read-only</span>
-        </label>
+          <div class="form-row">
+            <label class="form-label">Prefix (optional)</label>
+            <input v-model="s3Config.prefix" class="form-input" placeholder="data/" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Access Key ID <span class="form-optional">optional</span></label>
+            <input v-model="s3Config.key" class="form-input" placeholder="AKIA… (blank = use ~/.aws/credentials)" autocomplete="off" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Secret Access Key <span class="form-optional">optional</span></label>
+            <input v-model="s3Config.secret" class="form-input" type="password" placeholder="blank = use local credentials" autocomplete="off" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Region</label>
+            <input v-model="s3Config.region" class="form-input" placeholder="us-east-1" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Endpoint (optional, for R2/MinIO)</label>
+            <input v-model="s3Config.endpoint" class="form-input" placeholder="https://…r2.cloudflarestorage.com" />
+          </div>
+        </template>
+        <!-- DSN / file path for non-S3 -->
+        <template v-else>
+          <div class="form-row">
+            <label class="form-label">{{ isFileBased ? 'File path' : 'Connection string' }}</label>
+            <div v-if="isFileBased" class="dsn-row">
+              <input v-model="form.dsn" class="form-input dsn-input" :placeholder="DSN_PLACEHOLDER[form.type]" @input="onDsnInput" />
+              <button class="browse-btn" title="Browse…" @click="browseFile">…</button>
+            </div>
+            <textarea v-else v-model="form.dsn" class="form-input form-textarea" :placeholder="DSN_PLACEHOLDER[form.type]" rows="2" @input="onDsnInput" />
+          </div>
+          <label class="form-checkbox">
+            <input v-model="form.readOnly" type="checkbox" />
+            <span>Read-only</span>
+          </label>
+        </template>
         <div v-if="formError" class="form-error">{{ formError }}</div>
         <div class="form-actions">
           <button class="form-cancel" @click="cancelForm">Cancel</button>
@@ -416,8 +552,43 @@ onMounted(async () => {
         </div>
         <div v-if="connectErrors[conn.id]" class="conn-error">{{ connectErrors[conn.id] }}</div>
 
-        <!-- Schema explorer tree -->
-        <div v-if="explorer[conn.id]" class="explorer">
+        <!-- S3 file browser -->
+        <div v-if="conn.type === 's3' && s3Explorer[conn.id]" class="explorer">
+          <div class="s3-header">
+            <span class="s3-count" v-if="s3Explorer[conn.id].files">
+              {{ filteredS3Files(conn.id).length }}<template v-if="s3Explorer[conn.id].search"> / {{ s3Explorer[conn.id].files!.length }}</template> files
+            </span>
+            <div class="s3-header-right">
+              <button class="s3-sort-btn" :class="{ active: s3Explorer[conn.id].sortBy === 'name' }" title="Sort by name" @click="s3Explorer[conn.id].sortBy = 'name'">Name</button>
+              <button class="s3-sort-btn" :class="{ active: s3Explorer[conn.id].sortBy === 'date' }" title="Sort by modified date" @click="s3Explorer[conn.id].sortBy = 'date'">Date</button>
+              <button class="s3-refresh" title="Refresh file list" @click="loadS3Files(conn.id)">↻</button>
+            </div>
+          </div>
+          <div class="s3-search-row">
+            <input v-model="s3Explorer[conn.id].search" class="s3-search" placeholder="Filter files…" />
+          </div>
+          <div v-if="s3Explorer[conn.id].loading" class="ex-loading">Loading…</div>
+          <div v-else-if="s3Explorer[conn.id].error" class="ex-error">{{ s3Explorer[conn.id].error }}</div>
+          <div v-else-if="!s3Explorer[conn.id].files?.length" class="ex-loading">No importable files found</div>
+          <div v-else-if="!filteredS3Files(conn.id).length" class="ex-loading">No matches</div>
+          <template v-else>
+            <div
+              v-for="file in filteredS3Files(conn.id)"
+              :key="file.key"
+              class="s3-file"
+              :title="file.key"
+              @click="openS3File(conn, file)"
+            >
+              <span class="s3-ext" :class="`s3-ext-${file.ext.slice(1)}`">{{ file.ext.slice(1).toUpperCase() }}</span>
+              <div class="s3-file-meta">
+                <span class="s3-name">{{ file.name }}</span>
+                <span v-if="file.lastModified" class="s3-date">{{ formatDate(file.lastModified) }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <!-- Schema explorer tree (non-S3) -->
+        <div v-else-if="explorer[conn.id]" class="explorer">
           <div v-if="explorer[conn.id].loading" class="ex-loading">Loading…</div>
           <div v-else-if="explorer[conn.id].error" class="ex-error">{{ explorer[conn.id].error }}</div>
           <template v-else v-for="schema in explorer[conn.id].schemas" :key="schema.name">
@@ -467,14 +638,30 @@ onMounted(async () => {
 
 <style scoped>
 .sidebar {
-  width: 240px;
+  position: relative;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface-1);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  min-width: 160px;
+  max-width: 560px;
 }
+
+.sidebar-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.sidebar-resize-handle:hover { background: rgba(88, 166, 255, 0.3); }
+.sidebar.resizing .sidebar-resize-handle { background: rgba(88, 166, 255, 0.5); }
+.sidebar.resizing { user-select: none; }
 
 /* ── Tabs ── */
 .sidebar-tabs {
@@ -580,7 +767,8 @@ onMounted(async () => {
   display: flex; flex-direction: column; gap: 6px;
 }
 .form-row { display: flex; flex-direction: column; gap: 2px; }
-.form-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.form-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; display: flex; align-items: center; gap: 4px; }
+.form-optional { font-weight: 400; font-size: 9px; text-transform: none; letter-spacing: 0; opacity: 0.6; }
 .form-input {
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 4px; color: var(--text-primary);
@@ -636,6 +824,7 @@ onMounted(async () => {
 .badge-sqlite   { background: rgba(16,185,129,0.15); color: #34d399; }
 .badge-duckdb   { background: rgba(245,158,11,0.15); color: #fbbf24; }
 .badge-mysql    { background: rgba(239,68,68,0.15);  color: #f87171; }
+.badge-s3       { background: rgba(251,191,36,0.15); color: #fbbf24; }
 .conn-name {
   flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary);
@@ -749,6 +938,70 @@ onMounted(async () => {
 .ex-nullable { font-size: 9px; color: var(--text-muted); opacity: 0.6; flex-shrink: 0; }
 .ex-caret { font-size: 8px; color: var(--text-muted); flex-shrink: 0; width: 8px; }
 .ex-spin { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+
+/* ── S3 file browser ── */
+.s3-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 3px 8px 3px 10px; border-bottom: 1px solid var(--border);
+  gap: 4px;
+}
+.s3-count { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.s3-header-right { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.s3-sort-btn {
+  padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 600;
+  letter-spacing: 0.03em; text-transform: uppercase;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer; transition: color 0.1s, border-color 0.1s;
+}
+.s3-sort-btn:hover { color: var(--text-primary); }
+.s3-sort-btn.active { color: var(--accent); border-color: var(--accent); }
+.s3-refresh {
+  padding: 1px 4px; border-radius: 3px; font-size: 12px;
+  background: transparent; border: none; color: var(--text-muted); cursor: pointer;
+  transition: color 0.1s;
+}
+.s3-refresh:hover { color: var(--accent); }
+.s3-search-row {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.s3-search {
+  width: 100%; box-sizing: border-box;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text-primary);
+  font-size: 10.5px; padding: 3px 6px;
+  font-family: var(--font-mono, monospace); outline: none;
+}
+.s3-search:focus { border-color: var(--accent); }
+.s3-search::placeholder { color: var(--text-muted); opacity: 0.6; }
+.s3-file {
+  display: flex; align-items: flex-start; gap: 5px;
+  padding: 3px 10px; font-size: 10.5px; cursor: pointer;
+  transition: background 0.1s;
+}
+.s3-file:hover { background: var(--surface-2); }
+.s3-ext {
+  font-size: 8px; font-weight: 700; padding: 1px 3px; border-radius: 2px;
+  flex-shrink: 0; background: var(--surface-2); color: var(--text-muted);
+  margin-top: 1px;
+}
+.s3-ext-parquet { background: rgba(99,102,241,0.15); color: #818cf8; }
+.s3-ext-csv     { background: rgba(16,185,129,0.15); color: #34d399; }
+.s3-ext-json,
+.s3-ext-jsonl,
+.s3-ext-ndjson  { background: rgba(245,158,11,0.15); color: #fbbf24; }
+.s3-file-meta {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.s3-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-secondary); font-family: var(--font-mono);
+}
+.s3-file:hover .s3-name { color: var(--text-primary); }
+.s3-date {
+  font-size: 9px; color: var(--text-muted); opacity: 0.7;
+}
 
 /* ── Shared ── */
 .empty-hint {

@@ -42,6 +42,8 @@ export function GetMCPConfigStatus():Promise<main.MCPConfigStatus>;
 
 export function GetMCPPort():Promise<number>;
 
+export function GetS3Credentials():Promise<main.S3Credentials>;
+
 export function GetSchemaTables(arg1:string,arg2:string):Promise<Array<main.TableInfo>>;
 
 export function GetTableColumns(arg1:string,arg2:string,arg3:string):Promise<Array<main.ColumnMeta>>;
@@ -60,9 +62,13 @@ export function ImportSqliteFromBase64(arg1:string,arg2:string):Promise<Array<st
 
 export function ImportSqliteFromPath(arg1:string,arg2:string):Promise<Array<string>>;
 
+export function ImportTableFromJSON(arg1:string,arg2:string):Promise<void>;
+
 export function ListAttachedDatabases():Promise<main.QueryResult>;
 
 export function ListConnections():Promise<Array<main.ConnectionRecord>>;
+
+export function ListS3Objects(arg1:string):Promise<Array<main.S3Object>>;
 
 export function ListSampleDatasets():Promise<Array<main.SampleDataset>>;
 
@@ -78,6 +84,8 @@ export function OpenMultipleFilesDialog():Promise<Array<string>>;
 
 export function Query(arg1:string):Promise<main.QueryResult>;
 
+export function ReadTextFile(arg1:string):Promise<string>;
+
 export function SaveAISettings(arg1:main.AISettings):Promise<void>;
 
 export function SaveAppSettings(arg1:main.AppSettings):Promise<void>;
@@ -89,6 +97,8 @@ export function SaveConnection(arg1:main.ConnectionRecord):Promise<main.Connecti
 export function SaveFileWithDialog(arg1:string,arg2:string):Promise<string>;
 
 export function SaveImageFileWithDialog(arg1:string,arg2:string):Promise<string>;
+
+export function SaveS3Credentials(arg1:main.S3Credentials):Promise<void>;
 
 export function SaveTableData(arg1:string):Promise<void>;
 

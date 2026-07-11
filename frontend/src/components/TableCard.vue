@@ -6,8 +6,10 @@ import { useQueryBridge } from '../composables/useQueryBridge'
 import { useTableOps } from '../composables/useTableOps'
 import NodeColorPicker from './NodeColorPicker.vue'
 import { useContextMenu } from '../composables/useContextMenu'
+import { useDataPanel } from '../composables/useDataPanel'
 
 const { openNodeMenu } = useContextMenu()
+const { openPanel } = useDataPanel()
 
 const props = defineProps<{ table: TableNode; selected?: boolean }>()
 const emit = defineEmits<{
@@ -160,6 +162,16 @@ function typeColor(type: string) {
       <span class="card-count">{{ table.columns.length }}</span>
 
       <NodeColorPicker :color="table.color" @pick="schemaStore.setNodeColor(table.id, $event)" />
+
+      <button class="collapse-btn" title="Edit column types" @mousedown.stop @click.stop="openPanel(table.id)">
+        <svg viewBox="0 0 10 10" fill="none">
+          <line x1="1" y1="3" x2="9" y2="3" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="1" y1="5" x2="9" y2="5" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <line x1="1" y1="7" x2="9" y2="7" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+          <circle cx="3.5" cy="3" r="1.2" fill="white"/>
+          <circle cx="6.5" cy="7" r="1.2" fill="white"/>
+        </svg>
+      </button>
 
       <button class="collapse-btn" :title="isCollapsed ? 'Expand' : 'Collapse'" @mousedown.stop @click.stop="toggleCollapsed">
         <svg viewBox="0 0 10 10" fill="none">

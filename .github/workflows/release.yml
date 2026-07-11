@@ -1,15 +1,31 @@
 # Builds macOS and Windows desktop binaries on tag push and creates a GitHub release.
 #
-# Tagging workflow:
+# Tagging:
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# Secrets required for code signing (optional — builds work without them):
-#   APPLE_DEVELOPER_CERTIFICATE_P12_BASE64  — base64-encoded .p12 signing cert
-#   APPLE_DEVELOPER_CERTIFICATE_PASSWORD    — cert password
-#   APPLE_DEVELOPER_ID                      — "Developer ID Application: Name (TEAMID)"
-#   APPLE_ID / APPLE_ID_PASSWORD            — for notarization
-#   WINDOWS_SIGNING_CERT_BASE64             — base64-encoded .pfx
-#   WINDOWS_SIGNING_CERT_PASSWORD           — cert password
+# ── macOS code signing + notarization ──────────────────────────────────────────
+# All signing/notarization steps are guarded by secret presence so unsigned
+# builds still work for forks and PRs.
+#
+# Required secrets (Settings → Secrets → Actions):
+#   APPLE_DEVELOPER_CERTIFICATE_P12_BASE64
+#       base64-encoded Developer ID Application .p12 certificate
+#       Export from Keychain Access → right-click cert → Export → .p12
+#       Then: base64 -i cert.p12 | pbcopy
+#   APPLE_DEVELOPER_CERTIFICATE_PASSWORD
+#       Password you set when exporting the .p12
+#   APPLE_DEVELOPER_ID
+#       Full string from the cert, e.g. "Developer ID Application: Tony Mannino (XXXXXXXXXX)"
+#   APPLE_ID
+#       Your Apple ID email, e.g. tonym@example.com
+#   APPLE_APP_PASSWORD
+#       App-specific password from appleid.apple.com → Security → App-Specific Passwords
+#   APPLE_TEAM_ID
+#       10-character team ID from developer.apple.com/account
+#
+# ── Windows code signing ────────────────────────────────────────────────────────
+#   WINDOWS_SIGNING_CERT_BASE64   — base64-encoded .pfx
+#   WINDOWS_SIGNING_CERT_PASSWORD — cert password
 
 name: Release
 
@@ -25,6 +41,13 @@ jobs:
   build-macos:
     name: Build macOS (universal)
     runs-on: macos-latest
+    env:
+      APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+      APPLE_DEVELOPER_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
+      APPLE_DEVELOPER_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,10 +76,84 @@ jobs:
       - name: Build macOS universal binary
         run: wails build -platform darwin/universal -o sql.garden
 
-      - name: Package macOS app
+      # ── Code signing ────────────────────────────────────────────────────────
+
+      - name: Import signing certificate
+        if: env.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 != ''
         run: |
-          cd build/bin
-          zip -r sql.garden-macos-universal.zip sql.garden.app
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          KEYCHAIN_PASS=$(openssl rand -base64 32)
+
+          echo "$APPLE_DEVELOPER_CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_DEVELOPER_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          # Keep the login keychain in the search list so system tools still work
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+      - name: Sign app bundle
+        if: env.APPLE_DEVELOPER_ID != ''
+        run: |
+          codesign --deep --force --verify --verbose \
+            --sign "$APPLE_DEVELOPER_ID" \
+            --options runtime \
+            --entitlements build/darwin/entitlements.plist \
+            build/bin/sql.garden.app
+
+          # Verify
+          codesign --verify --deep --strict --verbose=2 build/bin/sql.garden.app
+
+      # ── Package ─────────────────────────────────────────────────────────────
+      # Use ditto (preserves symlinks and xattrs) instead of zip for notarization
+
+      - name: Package app
+        run: |
+          ditto -c -k --keepParent \
+            build/bin/sql.garden.app \
+            build/bin/sql.garden-macos-universal.zip
+
+      # ── Notarization ────────────────────────────────────────────────────────
+
+      - name: Notarize
+        if: env.APPLE_ID != '' && env.APPLE_TEAM_ID != ''
+        run: |
+          OUTPUT=$(xcrun notarytool submit build/bin/sql.garden-macos-universal.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --output-format json)
+          echo "$OUTPUT"
+          STATUS=$(echo "$OUTPUT" | jq -r '.status')
+          if [ "$STATUS" != "Accepted" ]; then
+            ID=$(echo "$OUTPUT" | jq -r '.id')
+            echo "Notarization failed (status: $STATUS) — fetching rejection log..."
+            xcrun notarytool log "$ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID"
+            exit 1
+          fi
+
+      - name: Staple notarization ticket
+        if: env.APPLE_ID != '' && env.APPLE_TEAM_ID != ''
+        run: |
+          xcrun stapler staple build/bin/sql.garden.app
+
+          # Re-package with the stapled ticket so offline Gatekeeper checks pass
+          rm build/bin/sql.garden-macos-universal.zip
+          ditto -c -k --keepParent \
+            build/bin/sql.garden.app \
+            build/bin/sql.garden-macos-universal.zip
+
+      # ── Artifact ────────────────────────────────────────────────────────────
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

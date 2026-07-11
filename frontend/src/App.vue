@@ -7,6 +7,7 @@ import Sidebar from './components/Sidebar.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import DatasetPickerModal from './components/DatasetPickerModal.vue'
 import ChartPropertiesPanel from './components/ChartPropertiesPanel.vue'
+import DataPropertiesPanel from './components/DataPropertiesPanel.vue'
 import HelpPanel from './components/HelpPanel.vue'
 import SearchPalette from './components/SearchPalette.vue'
 import ContextMenu from './components/ContextMenu.vue'
@@ -25,7 +26,7 @@ import { useSelection } from './composables/useSelection'
 import { IS_DESKTOP } from './lib/env'
 import type { main } from '../wailsjs/go/models'
 
-const { init, isReady, isLoading, initError, exec, query } = useDuckDB()
+const { init, isReady, isLoading, initError, exec, query, getTableInfo, importTableFromJSON } = useDuckDB()
 const schemaStore = useSchemaStore()
 const { loadAll, startAutoSave } = usePersistence()
 const { markAppReady } = useAppReady()
@@ -212,15 +213,33 @@ async function restoreDefaults() {
 
 const DROPPABLE = /\.(csv|tsv|txt|parquet|json|jsonl|sqlite|db|duckdb)$/i
 
-function handleFileDrop(_x: number, _y: number, paths: string[]) {
+async function handleFileDrop(_x: number, _y: number, paths: string[]) {
   if (!isReady.value) return
-  const valid = paths.filter((p) => DROPPABLE.test(p))
-  if (!valid.length) return
+
+  const bundles = paths.filter((p) => p.endsWith('.sql.garden.json'))
+  const dataFiles = paths.filter((p) => DROPPABLE.test(p) && !p.endsWith('.sql.garden.json'))
+
+  for (const path of bundles) {
+    try {
+      const { ReadTextFile } = await import('../wailsjs/go/main/App')
+      const text = await ReadTextFile(path)
+      const bundle = JSON.parse(text)
+      if (bundle.version === 1 && Array.isArray(bundle.nodes)) {
+        await importNodeBundle(bundle.nodes)
+      } else {
+        throw new Error('Not a valid node bundle')
+      }
+    } catch (err) {
+      loadError.value = `Node import failed: ${err instanceof Error ? err.message : String(err)}`
+      setTimeout(() => { loadError.value = null }, 6000)
+    }
+  }
+
+  if (!dataFiles.length) return
   if (showImport.value && importModalRef.value) {
-    // Modal already open — add directly to its queue
-    importModalRef.value.enqueuePaths(valid)
+    importModalRef.value.enqueuePaths(dataFiles)
   } else {
-    initialPathsForModal.value = valid
+    initialPathsForModal.value = dataFiles
     showImport.value = true
   }
 }
@@ -243,6 +262,8 @@ function contextMenuSections(): MenuSection[] {
       { label: 'Add Chart node',    shortcut: 'C', action: () => { if (isReady.value) addChartNode() } },
       { label: 'Add Markdown note', shortcut: 'N', action: addMarkdownNode },
       { label: 'Add Section',       shortcut: 'S', action: addSection },
+      { divider: true },
+      { label: 'Import nodes from .sql.garden.json…', action: () => jsonImportInputRef.value?.click() },
       { divider: true },
       { label: 'Fit View', shortcut: 'F', action: () => canvasRef.value?.fitView() },
     ]
@@ -281,9 +302,17 @@ function contextMenuSections(): MenuSection[] {
     items.push({ divider: true })
   }
 
+  const exportIds = selectedIds.value.size > 1 && selectedIds.value.has(id)
+    ? [...selectedIds.value]
+    : [id]
   items.push(
     { label: 'Bring to Front', action: () => schemaStore.bringToFront(id) },
     { label: 'Send to Back',   action: () => schemaStore.sendToBack(id) },
+    { divider: true },
+    {
+      label: exportIds.length > 1 ? `Export ${exportIds.length} nodes…` : 'Export node…',
+      action: () => doExportNodes(exportIds),
+    },
     { divider: true },
     {
       label: 'Delete',
@@ -308,6 +337,146 @@ function onCreateQueryFromConnection(payload: { name: string; sql: string }) {
   const id = `query_${Date.now()}`
   schemaStore.addQueryNode({ id, name, x: center.x - 140, y: center.y - 80, sql: payload.sql })
   canvasRef.value?.focusNode(id)
+}
+
+// ── Node export / import ──────────────────────────────────────────────────────
+
+const jsonImportInputRef = ref<HTMLInputElement | null>(null)
+
+import type { CanvasNode } from './stores/schema'
+
+function serializeForExport(node: CanvasNode): Record<string, unknown> {
+  // Spread all fields; drop sqlHistory (internal undo state, not useful in export)
+  const { sqlHistory: _drop, ...rest } = node as any
+  return rest
+}
+
+async function doExportNodes(nodeIds: string[]) {
+  const toExport = schemaStore.nodes.filter((n) => nodeIds.includes(n.id))
+  if (!toExport.length) return
+  const exportedNodes: Record<string, unknown>[] = []
+  for (const node of toExport) {
+    const n = serializeForExport(node)
+    if ((node.kind === 'data' || node.kind === 'table') && isReady.value) {
+      try {
+        const res = await query(`SELECT * FROM "${node.name}"`)
+        n._rows = res.rows
+      } catch { /* table not in DuckDB — export metadata only */ }
+    }
+    exportedNodes.push(n)
+  }
+  const bundle = { version: 1, exportedAt: new Date().toISOString(), nodes: exportedNodes }
+  const json = JSON.stringify(bundle, null, 2)
+  const filename = toExport.length === 1 ? `${toExport[0].name}.sql.garden.json` : 'canvas_nodes.sql.garden.json'
+  if (IS_DESKTOP) {
+    const { SaveFileWithDialog } = await import('../wailsjs/go/main/App')
+    await SaveFileWithDialog(filename, json)
+  } else {
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 150)
+  }
+}
+
+async function onNodeImportFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const text = await file.text()
+    const bundle = JSON.parse(text)
+    if (bundle.version !== 1 || !Array.isArray(bundle.nodes)) throw new Error('Not a valid node bundle (expected version:1)')
+    await importNodeBundle(bundle.nodes)
+  } catch (err) {
+    loadError.value = `Node import failed: ${err instanceof Error ? err.message : String(err)}`
+    setTimeout(() => { loadError.value = null }, 6000)
+  }
+}
+
+async function importNodeBundle(rawNodes: Record<string, unknown>[]) {
+  if (!rawNodes.length) return
+  schemaStore.snapshot()
+
+  const idMap: Record<string, string> = {}
+  const existingNames = new Set(schemaStore.nodes.map((n) => n.name))
+  const ts = Date.now()
+
+  function uniqueName(base: string): string {
+    let name = base
+    let i = 2
+    while (existingNames.has(name)) name = `${base}_${i++}`
+    existingNames.add(name)
+    return name
+  }
+
+  // Center the imported bundle on the current viewport
+  const center = canvasRef.value?.getCenter() ?? { x: 400, y: 300 }
+  let minX = Infinity, minY = Infinity
+  for (const n of rawNodes) {
+    if (typeof n.x === 'number' && n.x < minX) minX = n.x
+    if (typeof n.y === 'number' && n.y < minY) minY = n.y
+  }
+  const dx = isFinite(minX) ? center.x - minX - 120 : 40
+  const dy = isFinite(minY) ? center.y - minY - 80 : 40
+
+  // Sort: charts last so their sourceId refs are already in idMap
+  const sorted = [...rawNodes].sort((a, b) => (a.kind === 'chart' ? 1 : 0) - (b.kind === 'chart' ? 1 : 0))
+
+  for (let i = 0; i < sorted.length; i++) {
+    const node = sorted[i] as any
+    const oldId = String(node.id ?? '')
+    const newId = `${node.kind}_imp_${ts}_${i}`
+    if (oldId) idMap[oldId] = newId
+    const name = uniqueName(String(node.name ?? `imported_${i}`))
+    const x = (typeof node.x === 'number' ? node.x : 0) + dx
+    const y = (typeof node.y === 'number' ? node.y : 0) + dy
+    const base = { id: newId, name, x, y, color: node.color, w: node.w, h: node.h, viewMode: node.viewMode }
+
+    if (node.kind === 'query') {
+      schemaStore.addQueryNode({ ...base, sql: node.sql ?? '' })
+    } else if (node.kind === 'markdown') {
+      schemaStore.addMarkdownNode({ ...base, content: node.content ?? '' })
+    } else if (node.kind === 'section') {
+      schemaStore.addSection({ ...base, w: node.w ?? 300, h: node.h ?? 200 })
+    } else if (node.kind === 'chart') {
+      const sourceId = node.sourceId ? (idMap[node.sourceId] ?? null) : null
+      schemaStore.addChartNode({
+        ...base,
+        sourceId,
+        sql: node.sql ?? '',
+        chartType: node.chartType ?? 'barY',
+        xColumn: node.xColumn ?? '',
+        yColumn: node.yColumn ?? '',
+        colorColumn: node.colorColumn,
+        labelColumn: node.labelColumn,
+        chartLabel: node.chartLabel,
+        mermaidCode: node.mermaidCode,
+        conditions: node.conditions,
+        tableColumnConfigs: node.tableColumnConfigs,
+        trueText: node.trueText,
+        falseText: node.falseText,
+        trueColor: node.trueColor,
+        falseColor: node.falseColor,
+      })
+    } else if (node.kind === 'data' || node.kind === 'table') {
+      let columns = Array.isArray(node.columns) ? node.columns : []
+      let rowCount = typeof node.rowCount === 'number' ? node.rowCount : 0
+      if (Array.isArray(node._rows) && node._rows.length > 0) {
+        await importTableFromJSON(name, JSON.stringify(node._rows))
+        columns = await getTableInfo(name)
+        const rc = await query(`SELECT COUNT(*) AS n FROM "${name}"`)
+        rowCount = Number(rc.rows[0]?.n ?? 0)
+      }
+      if (node.kind === 'data') {
+        schemaStore.addDataNode({ ...base, name, columns, rowCount, columnCasts: node.columnCasts, sourceSql: node.sourceSql })
+      } else {
+        schemaStore.addTable({ ...base, name, columns, rowCount, columnCasts: node.columnCasts })
+      }
+    }
+  }
 }
 
 // Sample e-commerce schema seeded into DuckDB at startup
@@ -537,7 +706,10 @@ function handleCanvasAction(action: main.CanvasAction) {
     return
   }
   if (action.type === 'focus_node') {
-    if (action.nodeId) setTimeout(() => canvasRef.value?.focusNode(action.nodeId), 60)
+    if (action.nodeId) {
+      const node = action.nodeId
+      setTimeout(() => canvasRef.value?.focusNode(node), 60)
+    }
     return
   }
   if (action.type === 'update_query') {
@@ -548,6 +720,10 @@ function handleCanvasAction(action: main.CanvasAction) {
         if (node) node.name = action.name
       }
     }
+    return
+  }
+  if (action.type === 'set_color') {
+    if (action.nodeId) schemaStore.setNodeColor(action.nodeId, action.name)
     return
   }
   const pos = action.hasPosition ? { x: action.x ?? 0, y: action.y ?? 0 } : nextAIPosition()
@@ -571,6 +747,25 @@ function handleCanvasAction(action: main.CanvasAction) {
     const cols = (action.columns ?? []).map((c) => ({ name: c.name, type: c.type }))
     schemaStore.addTable({ id, name: action.name, ...pos, columns: cols })
     if (action.rowCount) schemaStore.setRowCount(id, action.rowCount)
+  } else if (action.type === 'data') {
+    const cols = (action.columns ?? []).map((c) => ({ name: c.name, type: c.type }))
+    schemaStore.addDataNode({
+      id,
+      name: action.name,
+      ...pos,
+      columns: cols,
+      rowCount: Number(action.rowCount ?? 0),
+      sourceId: action.sourceId || undefined,
+      sourceSql: action.sql || undefined,
+    })
+  } else if (action.type === 'section') {
+    schemaStore.addSection({
+      id,
+      name: action.name,
+      ...pos,
+      w: action.width || 400,
+      h: action.height || 300,
+    })
   }
   if (!action.hasPosition) setTimeout(() => canvasRef.value?.fitView(), 120)
 }
@@ -600,7 +795,7 @@ async function loadDataset(id: string) {
     setTimeout(() => canvasRef.value?.fitView(), 200)
   } catch (e) {
     console.error('loadDataset failed', e)
-    loadError.value = e instanceof Error ? e.message : String(e)
+    loadError.value = `Failed to load dataset: ${e instanceof Error ? e.message : String(e)}`
     setTimeout(() => { loadError.value = null }, 6000)
   }
 }
@@ -1179,9 +1374,9 @@ onUnmounted(async () => {
         >
           <svg viewBox="0 0 16 16" fill="none">
             <polyline points="2,5 7,10 2,15" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" :transform="showQuery ? 'rotate(90 8 10)' : ''"/>
-            <line x1="8" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="8" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="8" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="10" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="10" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
           Query
         </button>
@@ -1295,6 +1490,9 @@ onUnmounted(async () => {
     <!-- Chart properties panel (Figma-style right rail) -->
     <ChartPropertiesPanel />
 
+    <!-- Data node schema panel -->
+    <DataPropertiesPanel />
+
 
     <!-- Import modal -->
     <ImportModal
@@ -1306,10 +1504,19 @@ onUnmounted(async () => {
       @created="onImportCreated"
     />
 
+    <!-- Hidden file input for JSON node import -->
+    <input
+      ref="jsonImportInputRef"
+      type="file"
+      accept=".sql.garden.json,.json"
+      style="display:none"
+      @change="onNodeImportFile"
+    />
+
     <!-- Dataset load error toast -->
     <Transition name="toast">
       <div v-if="loadError" class="load-error-toast">
-        <span>⚠ Failed to load dataset: {{ loadError }}</span>
+        <span>⚠ {{ loadError }}</span>
       </div>
     </Transition>
 

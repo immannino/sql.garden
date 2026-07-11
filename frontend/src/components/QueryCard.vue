@@ -6,6 +6,7 @@ import { useDuckDB } from '../composables/useDuckDB'
 import { useQueryResults } from '../composables/useQueryResults'
 import { useAppReady } from '../composables/useAppReady'
 import { exportData, type ExportFormat } from '../lib/exportData'
+import { IS_DESKTOP } from '../lib/env'
 import SqlEditor from './SqlEditor.vue'
 import { useSchemaCompletions } from '../composables/useSchemaCompletions'
 import NodeColorPicker from './NodeColorPicker.vue'
@@ -21,7 +22,7 @@ const emit = defineEmits<{
 }>()
 
 const schemaStore = useSchemaStore()
-const { query, exec } = useDuckDB()
+const { query, exec, getTableInfo } = useDuckDB()
 const { sqlSchema } = useSchemaCompletions()
 const { results: queryResults, setResult } = useQueryResults()
 const { isAppReady } = useAppReady()
@@ -136,7 +137,7 @@ function onRenameKeydown(e: KeyboardEvent) {
 }
 
 // ── Resize ─────────────────────────────────────────────────────────────────────
-const DEFAULT_W = 280
+const DEFAULT_W = 360
 const DEFAULT_H = 84
 function startResize(e: MouseEvent, direction: 'e' | 's' | 'se') {
   emit('resizeStart', { id: props.node.id, mouseX: e.clientX, mouseY: e.clientY, startW: props.node.w ?? DEFAULT_W, startH: props.node.h ?? DEFAULT_H, direction })
@@ -276,6 +277,56 @@ onMounted(() => {
   const stop = watch(isAppReady, (ready) => { if (ready) { stop(); run() } })
 })
 
+// ── Materialize ────────────────────────────────────────────────────────────────
+const isMaterializing = ref(false)
+const materializeName = ref('')
+const materializeInputRef = ref<HTMLInputElement | null>(null)
+
+function startMaterialize(e: MouseEvent) {
+  e.stopPropagation()
+  if (!localSql.value.trim()) return
+  materializeName.value = `${props.node.name}_snapshot`
+  isMaterializing.value = true
+  nextTick(() => materializeInputRef.value?.select())
+}
+
+async function commitMaterialize() {
+  const name = materializeName.value.trim()
+  isMaterializing.value = false
+  if (!name || !localSql.value.trim()) return
+  const sql = localSql.value.trim().replace(/;+$/, '')
+  const safe = name.replace(/"/g, '""')
+  try {
+    await exec(`CREATE OR REPLACE TABLE "${safe}" AS (${sql})`)
+    const [columns, countResult] = await Promise.all([
+      getTableInfo(name),
+      query(`SELECT COUNT(*) AS n FROM "${safe}"`),
+    ])
+    const rowCount = Number(countResult.rows[0]?.n ?? 0)
+    schemaStore.addDataNode({
+      id: `data_${Date.now()}`,
+      name,
+      x: props.node.x + (props.node.w ?? DEFAULT_W) + 40,
+      y: props.node.y,
+      columns,
+      rowCount,
+      sourceId: props.node.id,
+      sourceSql: sql,
+    })
+    if (IS_DESKTOP) {
+      const { SaveTableData } = await import('../../wailsjs/go/main/App')
+      await SaveTableData(name)
+    }
+  } catch (err) {
+    runError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+function onMaterializeKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') { e.preventDefault(); commitMaterialize() }
+  if (e.key === 'Escape') { isMaterializing.value = false }
+}
+
 // ── Auto-refresh ───────────────────────────────────────────────────────────────
 const REFRESH_OPTIONS = [0, 5, 30, 60, 300, 1800]
 
@@ -311,7 +362,7 @@ onUnmounted(() => {
     class="query-card"
     :class="{ selected }"
     :data-node-id="node.id"
-    :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 280}px` }"
+    :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.w ?? 360}px` }"
     @mousedown="onMouseDown"
     @contextmenu.prevent.stop="openNodeMenu(node.id, $event.clientX, $event.clientY)"
   >
@@ -437,7 +488,7 @@ onUnmounted(() => {
         </div>
       </template>
       <div v-else-if="nodeResult?.isRunning" class="results-state">Running…</div>
-      <div v-else-if="nodeResult?.error" class="results-state results-error">{{ nodeResult.error.split('\n')[0] }}</div>
+      <div v-else-if="nodeResult?.error" class="results-state results-error">{{ nodeResult.error }}</div>
       <div v-else-if="nodeResult && !nodeResult.rows.length" class="results-state">No rows returned</div>
       <div v-else class="results-state">Run to see results</div>
     </div>
@@ -464,10 +515,7 @@ onUnmounted(() => {
     <!-- Footer -->
     <div class="card-footer">
       <span class="footer-status">
-        <span v-if="runError" class="status-error" :title="runError">
-          {{ runError.split('\n')[0] }}
-        </span>
-        <span v-else-if="runSummary" class="status-ok">{{ runSummary }}</span>
+        <span v-if="runSummary" class="status-ok">{{ runSummary }}</span>
         <span v-else class="status-hint">⌘↵ to run</span>
       </span>
       <select
@@ -500,6 +548,30 @@ onUnmounted(() => {
         </svg>
         View
       </button>
+      <template v-if="isMaterializing">
+        <input
+          ref="materializeInputRef"
+          v-model="materializeName"
+          class="materialize-input"
+          placeholder="table_name"
+          @mousedown.stop
+          @keydown="onMaterializeKeydown"
+          @blur="commitMaterialize"
+        />
+      </template>
+      <button
+        v-else
+        class="ghost-btn"
+        title="Materialize query result as a data table node"
+        @mousedown.stop
+        @click.stop="startMaterialize"
+      >
+        <svg viewBox="0 0 10 10" fill="none">
+          <ellipse cx="5" cy="3" rx="3" ry="1.2" stroke="currentColor" stroke-width="1.1"/>
+          <path d="M2 3v3.8c0 .66 1.34 1.2 3 1.2s3-.54 3-1.2V3" stroke="currentColor" stroke-width="1.1"/>
+        </svg>
+        → Data
+      </button>
       <button
         class="run-btn"
         :class="{ running: isRunning }"
@@ -514,6 +586,12 @@ onUnmounted(() => {
         </svg>
         {{ isRunning ? 'Running…' : 'Run' }}
       </button>
+    </div>
+
+    <!-- Run error -->
+    <div v-if="runError" class="card-run-error" @mousedown.stop>
+      <pre>{{ runError }}</pre>
+      <button class="run-error-close" @click.stop="runError = null">✕</button>
     </div>
 
     <!-- Resize handles -->
@@ -548,6 +626,13 @@ onUnmounted(() => {
 .query-card.selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2), 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Global user-select guard ─────────────────────────────────────────────── */
+.card-header, .card-name, .card-tabs, .card-footer,
+.ghost-btn, .run-btn, .collapse-btn, .delete-btn,
+.status-hint, .status-ok, .footer-status {
+  user-select: none;
 }
 
 /* ── Header ──────────────────────────────────────────────────────────────── */
@@ -810,6 +895,7 @@ onUnmounted(() => {
 .card-footer {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   padding: 5px 8px 6px 10px;
   gap: 6px;
 }
@@ -824,16 +910,6 @@ onUnmounted(() => {
   font-size: 10.5px;
   font-family: var(--font-mono);
   color: var(--success);
-}
-
-.status-error {
-  font-size: 10.5px;
-  font-family: var(--font-mono);
-  color: var(--error);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: block;
 }
 
 .status-hint {
@@ -888,6 +964,19 @@ onUnmounted(() => {
 }
 .ghost-btn.view-active:hover { background: rgba(63, 185, 80, 0.16); }
 
+.materialize-input {
+  width: 100px;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--surface-0);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+  flex-shrink: 0;
+}
+
 .view-error-msg {
   padding: 3px 8px;
   font-size: 10px;
@@ -907,6 +996,40 @@ onUnmounted(() => {
   cursor: pointer;
   font-size: 10px;
   padding: 0 2px;
+}
+
+.card-run-error {
+  border-top: 1px solid rgba(248, 81, 73, 0.3);
+  background: rgba(248, 81, 73, 0.08);
+  padding: 6px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.card-run-error pre {
+  margin: 0;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--error);
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+  max-height: 150px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.run-error-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 /* ── Export bar ──────────────────────────────────────────────────────────── */

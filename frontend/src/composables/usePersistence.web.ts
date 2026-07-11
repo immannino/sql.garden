@@ -9,9 +9,9 @@ export function usePersistenceWeb() {
 
   function saveCanvas(): void {
     const payload = schemaStore.nodes.map((node) => {
-      if (node.kind === 'table') {
-        const { kind, id, name, x, y, color, columns, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, columns, w, h, viewMode }
+      if (node.kind === 'table' || node.kind === 'data') {
+        const { kind, id, name, x, y, color, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, w, h, viewMode }
       }
       if (node.kind === 'query') {
         const { kind, id, name, x, y, color, sql, w, h, viewMode } = node
@@ -46,7 +46,7 @@ export function usePersistenceWeb() {
 
     for (const entry of saved) {
       const kind: string = entry.kind ?? 'table'
-      if (kind === 'table') continue  // table data is gone after page reload; skip
+      if (kind === 'table' || kind === 'data') continue  // materialized data is gone after page reload; skip
 
       try {
         if (kind === 'query') {
@@ -74,7 +74,7 @@ export function usePersistenceWeb() {
       }
     }
 
-    const nonTableCount = saved.filter((e) => (e.kind ?? 'table') !== 'table').length
+    const nonTableCount = saved.filter((e) => (e.kind ?? 'table') !== 'table' && e.kind !== 'data').length
     if (nonTableCount > 0 || saved.length > 0) {
       schemaStore.setColorCursor(saved.length)
       return true

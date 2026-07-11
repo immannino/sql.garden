@@ -286,6 +286,44 @@ export namespace main {
 	        this.durationMs = source["durationMs"];
 	    }
 	}
+	export class S3Credentials {
+	    key: string;
+	    secret: string;
+	    region: string;
+	    endpoint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new S3Credentials(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.secret = source["secret"];
+	        this.region = source["region"];
+	        this.endpoint = source["endpoint"];
+	    }
+	}
+	export class S3Object {
+	    key: string;
+	    name: string;
+	    ext: string;
+	    lastModified: number;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new S3Object(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.ext = source["ext"];
+	        this.lastModified = source["lastModified"];
+	        this.size = source["size"];
+	    }
+	}
 	export class SampleDataset {
 	    id: string;
 	    name: string;

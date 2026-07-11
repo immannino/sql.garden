@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { useDuckDB } from './useDuckDB'
 import { useSchemaStore } from '../stores/schema'
-import type { Column, ChartNode, MarkdownNode } from '../stores/schema'
+import type { Column, ChartNode, MarkdownNode, DataNode } from '../stores/schema'
 import { IS_DESKTOP } from '../lib/env'
 import { usePersistenceWeb } from './usePersistence.web'
 import {
@@ -46,7 +46,7 @@ function idbGet(key: string): Promise<Uint8Array | undefined> {
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function useDesktopPersistence() {
-  const { query, getTableInfo } = useDuckDB()
+  const { query, exec, getTableInfo } = useDuckDB()
   const schemaStore = useSchemaStore()
 
   // Called after a new table is imported — writes its parquet snapshot to disk.
@@ -63,8 +63,12 @@ function useDesktopPersistence() {
   function saveCanvas(): void {
     const payload = schemaStore.nodes.map((node) => {
       if (node.kind === 'table') {
-        const { kind, id, name, x, y, color, columns, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, columns, w, h, viewMode }
+        const { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode }
+      }
+      if (node.kind === 'data') {
+        const { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode } = node
+        return { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode }
       }
       if (node.kind === 'query') {
         const { kind, id, name, x, y, color, sql, w, h, viewMode } = node
@@ -116,7 +120,7 @@ function useDesktopPersistence() {
           const rowCount = Number(countResult.rows[0]?.n ?? 0)
           const cols: Column[] = columns
 
-          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, columnCasts: entry.columnCasts, w: entry.w, h: entry.h, viewMode: entry.viewMode })
           schemaStore.setRowCount(entry.id, rowCount)
           tablesRestored++
         } else if (kind === 'query') {
@@ -143,6 +147,40 @@ function useDesktopPersistence() {
           schemaStore.addChartNode(c)
         } else if (kind === 'section') {
           schemaStore.addSection({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, w: entry.w ?? 400, h: entry.h ?? 300 })
+        } else if (kind === 'data') {
+          const parquetPath = await GetTableDataPath(entry.name)
+          if (!parquetPath) continue
+
+          await ImportFromPath(parquetPath, entry.name)
+
+          const safeTable = entry.name.replace(/"/g, '""')
+
+          // Re-apply any stored column casts
+          if (entry.columnCasts && Object.keys(entry.columnCasts).length > 0) {
+            for (const [colName, cast] of Object.entries(entry.columnCasts as Record<string, { type: string; expr: string }>)) {
+              const safeCol = colName.replace(/"/g, '""')
+              const alterSQL = cast.expr
+                ? `ALTER TABLE "${safeTable}" ALTER COLUMN "${safeCol}" TYPE ${cast.type} USING (${cast.expr})`
+                : `ALTER TABLE "${safeTable}" ALTER COLUMN "${safeCol}" TYPE ${cast.type}`
+              await exec(alterSQL).catch((e: unknown) => console.warn(`Cast restore failed for ${colName}:`, e))
+            }
+          }
+
+          const [columns, countResult] = await Promise.all([
+            getTableInfo(entry.name),
+            query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
+          ])
+          const rowCount = Number(countResult.rows[0]?.n ?? 0)
+          const cols: Column[] = columns
+
+          schemaStore.addDataNode({
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
+            columns: cols, rowCount,
+            sourceId: entry.sourceId, sourceSql: entry.sourceSql,
+            columnCasts: entry.columnCasts,
+            w: entry.w, h: entry.h, viewMode: entry.viewMode,
+          } as Omit<DataNode, 'kind' | 'color'> & { color?: string })
+          tablesRestored++
         }
       } catch (e) {
         console.warn(`Failed to restore node "${entry.name ?? entry.id}":`, e)
@@ -197,7 +235,7 @@ function useDesktopPersistence() {
           const rowCount = Number(countResult.rows[0]?.n ?? 0)
           const cols: Column[] = columns
 
-          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, columnCasts: entry.columnCasts, w: entry.w, h: entry.h, viewMode: entry.viewMode })
           schemaStore.setRowCount(entry.id, rowCount)
           tablesRestored++
         } else if (kind === 'query') {

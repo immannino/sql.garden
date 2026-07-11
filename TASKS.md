@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
-> Version: v0.0.0-alpha.7
-> Updated: 2026-06-24 (session 2)
+> Version: v0.0.0-alpha.11
+> Updated: 2026-07-09 (session 9)
 
 ---
 
@@ -38,6 +38,8 @@
 - [x] Schema-aware SQL autocomplete (table + column names from canvas)
 - [x] Empty result set shows 0 rows instead of null error
 - [x] Query history per node — History tab, per-node log of past SQL runs with restore
+- [x] Error display moved to bottom — full multiline error in an expanding panel below the footer (red background, scrollable, dismissable ✕); removed truncated single-line error from status bar
+- [x] Default card width 360px + `flex-wrap: wrap` on footer — prevents button overflow on narrower viewports
 
 ### Chart Nodes
 - [x] Chart types: barY, barX, lineY, areaY, dot, cell, pie/donut, number, boolean, conditional, mermaid, table, histogram, boxplot, sankey
@@ -61,6 +63,11 @@
 - [x] Connections tab (PostgreSQL, SQLite, DuckDB, MySQL)
 - [x] Connection schema explorer (expand schemas → tables → columns)
 - [x] Auto-reconnect saved connections on startup
+- [x] V/T icon bug fixed — `GetSchemaTables` now uses `information_schema.tables` with `CASE table_type WHEN 'VIEW' THEN 'view' ELSE 'table' END`; works correctly for all attachment types (SQLite, Postgres, DuckDB native)
+
+### S3 / Object Storage
+- [x] S3 URL import — `ImportFromUrl` intercepts `s3://` scheme, configures DuckDB `httpfs` secret from stored credentials, reads parquet/csv/json directly; supports AWS, R2, MinIO via optional endpoint field
+- [x] S3 credentials Settings tab — desktop-only tab in Settings modal; fields for key, secret, region, endpoint; saved to persistence DB; tip text explains `s3://` URL usage in import modal
 
 ### MCP / AI
 - [x] MCP server over SSE (port 37421) — canvas tools exposed
@@ -73,6 +80,25 @@
 - [x] `update_query_node` MCP tool — overwrite SQL (and optionally rename) an existing query node in-place; no delete-and-recreate needed
 - [x] `import_csv_data` MCP tool — agents pipe raw CSV text directly into DuckDB; pre-import column-count validation returns actionable errors on malformed CSV
 - [x] `import_url` MCP tool — server-side fetch of remote CSV/Parquet/JSON; bypasses CORS entirely
+- [x] `import_s3` MCP tool — load files from `s3://` URIs; validates scheme prefix, delegates to `importFromS3` with stored credentials; 3 validation error tests
+- [x] `materialize_query` MCP tool — snapshot a SQL query as a persistent DuckDB table + DataNode; survives restarts, accepts optional `source_id` for canvas linking; trailing semicolons stripped automatically
+- [x] `list_canvas_nodes` extended — now returns both `query` and `data` nodes, with kind prefix in output (`query id=... name=...` / `data id=... name=...`)
+- [x] `set_node_color` MCP tool — set accent color of any canvas node by id; useful for highlighting KPIs or flagging anomalies
+- [x] `add_section` MCP tool — create a named Section container; width/height configurable, defaults to 400×300
+
+### Data Nodes
+- [x] `DataNode` type (`kind: 'data'`) — materialized DuckDB table as a first-class canvas node; `name` is the DuckDB table name
+- [x] Column type casting — click any type badge on DataCard to open an inline editor; pick a target type (DOUBLE, DECIMAL(18,2), BIGINT, VARCHAR, DATE, TIMESTAMP, BOOLEAN) with an optional `USING` expression; DOUBLE/DECIMAL auto-fill `regexp_replace` strip expression; casts stored in `columnCasts` on the node, persisted to canvas state, and re-applied automatically on Refresh and startup restore
+- [x] `DataCard.vue` — cylinder icon, column list, row count, stale badge, Refresh button, inline rename (renames DuckDB table), two-click delete (drops table)
+- [x] Stale detection — amber border + "stale" badge + amber Refresh button when source QueryNode's SQL has changed since last materialize
+- [x] Refresh — re-runs `CREATE OR REPLACE TABLE` from current source SQL, updates columns/rowCount, saves on desktop
+- [x] Rename — `ALTER TABLE old RENAME TO new` + `DeleteTableData`/`SaveTableData` on desktop
+- [x] Delete — drops DuckDB table + removes canvas node
+- [x] "→ Data" materialize button on QueryCard — inline name input (default `<name>_snapshot`), creates DataNode offset to the right; trailing semicolons stripped before `CREATE OR REPLACE TABLE`
+- [x] ChartCard `runLinked()` — DataNode source queries `SELECT * FROM "<name>"` instead of re-running SQL
+- [x] ChartPropertiesPanel — source picker includes DataNodes (`kind === 'data'`), labeled with `(table)` suffix; `runLinked()` handles DataNode
+- [x] Desktop persistence — DataNode saves/restores via `SaveTableData`/parquet (same path as imported CSV tables)
+- [x] Web persistence — DataNode skipped on page reload (materialized data doesn't survive reload, same as TableNode)
 
 ### Keyboard & Input
 - [x] Global hotkey guard: no app shortcuts fire when focus is in a text field or code editor
@@ -84,9 +110,19 @@
 - [x] Node search / jump-to — Cmd+K palette
 - [x] Duplicate node — Cmd+D, offset 24px, auto-selects copies
 
+### Sidebar
+- [x] **Resizable sidebar** — drag handle on right edge, 160–560px range, accent highlight on hover/drag
+- [x] **S3 file browser QoL** — search/filter box, Name/Date sort toggle, modified date display per file, file count shows filtered/total when searching; `LastModified` + `Size` added to `S3Object` backend struct
+- [x] **Edit menu removed** — greyed-out Edit submenu deleted from `buildMenu()`; clipboard fully handled by JS shim
+- [x] **In-app changelog** — "What's New" tab in Settings; lazy-fetches GitHub releases API, shows tag/date/body for last 10 releases
+
+### Canvas Operations
+- [x] **Node export / import (.sql.garden.json)** — right-click any node (or multi-select) → "Export node…" triggers native save dialog (desktop) or blob download (web). Data/table nodes embed full row data as `_rows`. Import via canvas right-click, file picker, or drag-drop a `.sql.garden.json` onto the window. Import centers bundle on current viewport, remaps IDs/names to avoid conflicts, processes charts last so `sourceId` refs resolve correctly. Entire import is a single undo snapshot.
+
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
 - [x] macOS .app zipped before artifact upload (preserves bundle structure)
+- [x] **Code signing & notarization workflow** — `build/darwin/entitlements.plist` created (allow-jit, network.client/server, files.user-selected.read-write); bundle ID set to `garden.sql`; release.yml updated with keychain import → `codesign --options runtime` → `ditto` packaging → `notarytool submit --wait` → `stapler staple` → re-package. All steps guarded by secret presence so unsigned builds still work. Notarize step captures Apple rejection log on failure via `notarytool log`. **Blocked on Apple Developer account activation.**
 
 ---
 
@@ -118,6 +154,13 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [x] Canvas stream reconnect — new subscriber after prior connection closed still receives events
 - [x] `focus_node` — emits focus_node action with correct nodeId, missing node_id error
 - [x] `update_query_node` — emits update_query action with new SQL, optional name propagation, missing field errors
+- [x] `materialize_query` — emits data canvas action, rowCount correct, stable nodeId, trailing semicolons stripped, source_id propagation, missing field errors
+- [x] `list_canvas_nodes` extended — data node appears with 'data' kind prefix after materialize_query
+- [x] `tools/list` — updated to assert `materialize_query`, `set_node_color`, `add_section` are registered
+- [x] `set_node_color` — emits set_color action with nodeId + color, missing field errors (3 scenarios)
+- [x] `add_section` — emits section action with name/dimensions, defaults to 400×300, missing name error (3 scenarios)
+- [x] `tools/list` — updated to assert `import_s3` is registered
+- [x] `import_s3` — missing s3_url error, non-s3:// scheme error, missing table_name error (3 validation scenarios)
 
 ---
 
@@ -125,7 +168,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 - [ ] **Clipboard shim needs rebuild** — The Go `ClipboardGet`/`ClipboardSet` methods and their JS bindings are new. Requires `wails dev` or `wails build` to regenerate `wailsjs/go/main/App.js` before the shim in App.vue and SqlEditor.vue takes effect.
 
-- [ ] **Edit menu items are greyed out** — The Edit submenu was added with `nil` callbacks; Wails doesn't wire nil-callback items to the native NSResponder selectors so they appear disabled in the menu bar. Clipboard now works via the JS shim, but the menu looks wrong. Options: remove the Edit menu entirely (clipboard shim handles everything), or replace nil callbacks with JS-dispatching callbacks that call `document.execCommand`.
+- [x] **Edit menu items are greyed out** — Removed the Edit submenu entirely; clipboard works via the JS shim (Cmd+X/C/V/A/Z handled in App.vue and SqlEditor.vue), so the menu added no value and all items appeared disabled.
 
 ---
 
@@ -138,18 +181,20 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
 
+### S3 / Object Storage
+- [x] **S3 bucket connection** — S3/R2/MinIO as a connection type in the Sidebar. Per-connection credentials (bucket, key, secret, region, endpoint) stored as JSON in the DSN field. On connect: httpfs secret created with bucket SCOPE so multiple S3 connections coexist. File browser lists all .parquet/.csv/.json/.jsonl/.ndjson files; clicking opens a QueryNode with `read_parquet/read_csv_auto/read_json_auto`. Refresh button re-lists. DisconnectSaved drops the secret.
+
 ### Charts
 - [ ] **More chart types** — Scatter matrix, waterfall, heatmap (histogram/boxplot/sankey done).
 
 ### MCP Expansions
-- [ ] **`set_node_color` MCP tool** — Let agents apply color coding to canvas nodes (e.g. highlight a KPI node in red when a threshold is breached).
-- [ ] **`add_section` MCP tool** — Agents can create Section containers to visually group related nodes without the user needing to right-click.
+- [x] **`import_s3` MCP tool** — Dedicated S3 import tool so agents can load files from `s3://` URIs directly (credentials from stored S3 settings).
 
 ### Canvas Structure
 - [ ] **Canvas tabs** — Multiple named canvases as tabs within the app (Figma documents-style). Data model: `nodes` keyed by `canvasId`; SQLite `canvas_state` gets a `canvas_id` column + migration. Tab strip in toolbar. Significant effort — needs a dedicated planning session before touching persistence layer.
 
 ### Discovery & Content
-- [ ] **In-app changelog/news feed** — Small panel (or Settings tab) that fetches a hosted JSON/RSS feed you control. Surfaces release notes, tips, and announcements. Weekend-scale effort.
+- [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.
 - [ ] **Dataset directory** — Hosted JSON index of curated public datasets (FRED, Census, Our World in Data, stock market, healthcare, etc.) with name, source URL, description, tags, and license. In-app "Explore" panel fetches + searches the index; clicking a dataset fires the existing URL import flow. Index starts as a hand-curated JSON file in a GitHub repo — no database needed. Strong differentiator; dataset index is a separate hosted artifact.
 - [ ] **Community / Explore page** — Longer-term hub surfacing dataset directory, user-shared canvases, blog posts, and curated data stories. Builds on the dataset directory and news feed foundations.
 
@@ -160,7 +205,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [ ] **SSH tunnel support** — Config for connecting to remote DBs via SSH port-forward.
 
 ### Desktop-specific
-- [ ] **Code signing & notarization** — CI secrets scaffolded but not tested end-to-end. Without notarization, macOS requires "Allow from anywhere" Gatekeeper override.
+- [ ] **Code signing & notarization** — Workflow fully implemented; waiting on Apple Developer account activation to add secrets and test end-to-end. See CI / Release in Done section for details.
 - [ ] **Auto-update download + relaunch** — Banner appears when update is available but only links to GitHub releases. Wire a native download-and-relaunch flow.
 - [ ] **Windows smoke test** — CI builds the Windows binary but no manual QA done.
 

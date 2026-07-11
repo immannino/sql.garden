@@ -279,9 +279,11 @@ func (r *runner) runAll() {
 		required := []string{
 			"list_tables", "list_canvas_nodes", "run_query",
 			"add_query_node", "add_chart_node", "add_markdown_node",
-			"import_file", "import_csv_data", "import_url",
+			"materialize_query",
+			"import_file", "import_csv_data", "import_url", "import_s3",
 			"resize_node", "move_node",
 			"focus_node", "update_query_node",
+			"set_node_color", "add_section",
 			"clear_canvas", "fit_view",
 		}
 		nameSet := make(map[string]bool, len(names))
@@ -795,6 +797,51 @@ func (r *runner) runAll() {
 		return nil
 	})
 
+	// ── import_s3 ────────────────────────────────────────────────────────────
+
+	r.run("import_s3: missing s3_url returns error", func() error {
+		resp, _, err := r.call("import_s3", map[string]any{
+			"table_name": "mcp_test_s3_nourl",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing s3_url, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("import_s3: non-s3:// URL returns error", func() error {
+		resp, actions, err := r.call("import_s3", map[string]any{
+			"s3_url":     "https://example.com/file.parquet",
+			"table_name": "mcp_test_s3_badscheme",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for non-s3:// URL, got: %q", resp)
+		}
+		if act := findAction(actions, "table"); act != nil {
+			return fmt.Errorf("expected no canvas action for failed import, got one")
+		}
+		return nil
+	})
+
+	r.run("import_s3: missing table_name returns error", func() error {
+		resp, _, err := r.call("import_s3", map[string]any{
+			"s3_url": "s3://my-bucket/data.parquet",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing table_name, got: %q", resp)
+		}
+		return nil
+	})
+
 	// ── resize_node ───────────────────────────────────────────────────────────
 
 	r.run("resize_node emits resize_node action with correct width/height", func() error {
@@ -1161,6 +1208,246 @@ func (r *runner) runAll() {
 		}
 		if !strings.Contains(strings.ToLower(resp), "error") {
 			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── materialize_query ─────────────────────────────────────────────────────
+
+	r.run("materialize_query: emits data canvas action with correct rowCount and nodeId", func() error {
+		resp, actions, err := r.call("materialize_query", map[string]any{
+			"table_name": "mat_test",
+			"sql":        "SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("materialize reported error: %q", resp)
+		}
+		wantID := "mcp_mat_test"
+		if !strings.Contains(resp, wantID) {
+			return fmt.Errorf("response missing nodeId %q: %q", wantID, resp)
+		}
+		act := findAction(actions, "data")
+		if act == nil {
+			return fmt.Errorf("no 'data' canvas action received (response: %q)", resp)
+		}
+		if act.RowCount != 3 {
+			return fmt.Errorf("want rowCount=3, got %d", act.RowCount)
+		}
+		if act.NodeID != wantID {
+			return fmt.Errorf("want nodeId=%q, got %q", wantID, act.NodeID)
+		}
+		return nil
+	})
+
+	r.run("materialize_query: trailing semicolon stripped — no error", func() error {
+		resp, actions, err := r.call("materialize_query", map[string]any{
+			"table_name": "mat_semi",
+			"sql":        "SELECT 'hello' AS msg;",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("semicolon should be stripped, got error: %q", resp)
+		}
+		if findAction(actions, "data") == nil {
+			return fmt.Errorf("no 'data' canvas action received (response: %q)", resp)
+		}
+		return nil
+	})
+
+	r.run("materialize_query: source_id propagates to canvas action", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Mat Source",
+			"sql":  "SELECT 1 AS v",
+		})
+		if err != nil {
+			return err
+		}
+		sourceID := "mcp_mat_source"
+		_, actions, err := r.call("materialize_query", map[string]any{
+			"table_name": "mat_linked",
+			"sql":        "SELECT 1 AS v",
+			"source_id":  sourceID,
+		})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "data")
+		if act == nil {
+			return fmt.Errorf("no 'data' canvas action received")
+		}
+		if act.SourceID != sourceID {
+			return fmt.Errorf("want sourceId=%q, got %q", sourceID, act.SourceID)
+		}
+		return nil
+	})
+
+	r.run("materialize_query: missing table_name returns error", func() error {
+		resp, _, err := r.call("materialize_query", map[string]any{
+			"sql": "SELECT 1",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing table_name, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("materialize_query: missing sql returns error", func() error {
+		resp, _, err := r.call("materialize_query", map[string]any{
+			"table_name": "mat_nosql",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing sql, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("list_canvas_nodes: data node appears with 'data' kind after materialize_query", func() error {
+		_, _, err := r.call("materialize_query", map[string]any{
+			"table_name": "mat_list_check",
+			"sql":        "SELECT 1 AS n",
+		})
+		if err != nil {
+			return err
+		}
+		resp, _, err := r.call("list_canvas_nodes", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp, "mcp_mat_list_check") {
+			return fmt.Errorf("expected mcp_mat_list_check in list, got: %q", resp)
+		}
+		if !strings.Contains(resp, "data") {
+			return fmt.Errorf("expected 'data' kind in list output, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── set_node_color ────────────────────────────────────────────────────────
+
+	r.run("set_node_color: emits set_color action with correct nodeId and color", func() error {
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Color Target",
+			"sql":  "SELECT 1",
+		})
+		if err != nil {
+			return err
+		}
+		nodeID := "mcp_color_target"
+		wantColor := "#ef4444"
+		resp, actions, err := r.call("set_node_color", map[string]any{
+			"node_id": nodeID,
+			"color":   wantColor,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("set_node_color returned error: %q", resp)
+		}
+		act := findAction(actions, "set_color")
+		if act == nil {
+			return fmt.Errorf("no 'set_color' canvas action received (response: %q)", resp)
+		}
+		if act.NodeID != nodeID {
+			return fmt.Errorf("want nodeId=%q, got %q", nodeID, act.NodeID)
+		}
+		if act.Name != wantColor {
+			return fmt.Errorf("want color=%q in Name, got %q", wantColor, act.Name)
+		}
+		return nil
+	})
+
+	r.run("set_node_color: missing node_id returns error", func() error {
+		resp, _, err := r.call("set_node_color", map[string]any{"color": "#3b82f6"})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing node_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("set_node_color: missing color returns error", func() error {
+		resp, _, err := r.call("set_node_color", map[string]any{"node_id": "mcp_color_target"})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing color, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── add_section ───────────────────────────────────────────────────────────
+
+	r.run("add_section: emits section action with name and dimensions", func() error {
+		resp, actions, err := r.call("add_section", map[string]any{
+			"name":   "Test Group",
+			"width":  600.0,
+			"height": 400.0,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("add_section returned error: %q", resp)
+		}
+		act := findAction(actions, "section")
+		if act == nil {
+			return fmt.Errorf("no 'section' canvas action received (response: %q)", resp)
+		}
+		if act.Name != "Test Group" {
+			return fmt.Errorf("want name=%q, got %q", "Test Group", act.Name)
+		}
+		if act.NodeID != "mcp_test_group" {
+			return fmt.Errorf("want nodeId=mcp_test_group, got %q", act.NodeID)
+		}
+		if act.Width != 600 {
+			return fmt.Errorf("want width=600, got %g", act.Width)
+		}
+		if act.Height != 400 {
+			return fmt.Errorf("want height=400, got %g", act.Height)
+		}
+		return nil
+	})
+
+	r.run("add_section: default dimensions when omitted", func() error {
+		_, actions, err := r.call("add_section", map[string]any{"name": "Defaults Group"})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "section")
+		if act == nil {
+			return fmt.Errorf("no 'section' canvas action received")
+		}
+		if act.Width != 400 {
+			return fmt.Errorf("want default width=400, got %g", act.Width)
+		}
+		if act.Height != 300 {
+			return fmt.Errorf("want default height=300, got %g", act.Height)
+		}
+		return nil
+	})
+
+	r.run("add_section: missing name returns error", func() error {
+		resp, _, err := r.call("add_section", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing name, got: %q", resp)
 		}
 		return nil
 	})

@@ -82,6 +82,10 @@ export function GetMCPPort() {
   return window['go']['main']['App']['GetMCPPort']();
 }
 
+export function GetS3Credentials() {
+  return window['go']['main']['App']['GetS3Credentials']();
+}
+
 export function GetSchemaTables(arg1, arg2) {
   return window['go']['main']['App']['GetSchemaTables'](arg1, arg2);
 }
@@ -118,12 +122,20 @@ export function ImportSqliteFromPath(arg1, arg2) {
   return window['go']['main']['App']['ImportSqliteFromPath'](arg1, arg2);
 }
 
+export function ImportTableFromJSON(arg1, arg2) {
+  return window['go']['main']['App']['ImportTableFromJSON'](arg1, arg2);
+}
+
 export function ListAttachedDatabases() {
   return window['go']['main']['App']['ListAttachedDatabases']();
 }
 
 export function ListConnections() {
   return window['go']['main']['App']['ListConnections']();
+}
+
+export function ListS3Objects(arg1) {
+  return window['go']['main']['App']['ListS3Objects'](arg1);
 }
 
 export function ListSampleDatasets() {
@@ -154,6 +166,10 @@ export function Query(arg1) {
   return window['go']['main']['App']['Query'](arg1);
 }
 
+export function ReadTextFile(arg1) {
+  return window['go']['main']['App']['ReadTextFile'](arg1);
+}
+
 export function SaveAISettings(arg1) {
   return window['go']['main']['App']['SaveAISettings'](arg1);
 }
@@ -176,6 +192,10 @@ export function SaveFileWithDialog(arg1, arg2) {
 
 export function SaveImageFileWithDialog(arg1, arg2) {
   return window['go']['main']['App']['SaveImageFileWithDialog'](arg1, arg2);
+}
+
+export function SaveS3Credentials(arg1) {
+  return window['go']['main']['App']['SaveS3Credentials'](arg1);
 }
 
 export function SaveTableData(arg1) {

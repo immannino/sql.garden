@@ -125,12 +125,29 @@ async function runInline() {
 async function runLinked() {
   const sid = props.node.sourceId
   if (!sid || isRunning.value) return
-  const sourceNode = schemaStore.nodes.find((n) => n.id === sid && n.kind === 'query')
-  if (!sourceNode || sourceNode.kind !== 'query') return
+  const sourceNode = schemaStore.nodes.find((n) => n.id === sid)
+  if (!sourceNode) return
+  const { setResult } = useQueryResults()
+
+  if (sourceNode.kind === 'data') {
+    isRunning.value = true
+    setResult(sid, { columns: [], rows: [], error: null, isRunning: true })
+    try {
+      const safe = sourceNode.name.replace(/"/g, '""')
+      const result = await query(`SELECT * FROM "${safe}"`)
+      setResult(sid, { columns: result.columns, columnTypes: result.columnTypes, rows: result.rows, error: null, isRunning: false })
+    } catch (err) {
+      setResult(sid, { columns: [], rows: [], error: err instanceof Error ? err.message : String(err), isRunning: false })
+    } finally {
+      isRunning.value = false
+    }
+    return
+  }
+
+  if (sourceNode.kind !== 'query') return
   const sql = sourceNode.sql.trim()
   if (!sql) return
   isRunning.value = true
-  const { setResult } = useQueryResults()
   setResult(sid, { columns: [], rows: [], error: null, isRunning: true })
   try {
     const result = await query(sql)

@@ -346,6 +346,19 @@ var mcpToolDefs = []map[string]any{
 		},
 	},
 	{
+		"name":        "materialize_query",
+		"description": "Snapshot a SQL query's results into a named DuckDB table and pin it to the canvas as a persistent Data node. Unlike add_query_node (which re-runs SQL on demand), a Data node stores a snapshot that survives app restarts and can be queried directly. Use for expensive aggregations or stable reference datasets.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"table_name": map[string]any{"type": "string", "description": "DuckDB table name for the snapshot (snake_case recommended)"},
+				"sql":        map[string]any{"type": "string", "description": "SQL query whose results are materialized — do not include a trailing semicolon"},
+				"source_id":  map[string]any{"type": "string", "description": "Optional ID of a query node this was derived from, used for canvas linking"},
+			},
+			"required": []string{"table_name", "sql"},
+		},
+	},
+	{
 		"name":        "import_file",
 		"description": "Import a local CSV, Parquet, or JSON file into DuckDB and add it as a table node on the canvas.",
 		"inputSchema": map[string]any{
@@ -379,6 +392,18 @@ var mcpToolDefs = []map[string]any{
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
 			},
 			"required": []string{"url", "table_name"},
+		},
+	},
+	{
+		"name":        "import_s3",
+		"description": "Load a file from S3, Cloudflare R2, MinIO, or any S3-compatible store into DuckDB and add it as a canvas node. Credentials must be configured in Settings → S3 Storage. Accepts s3:// URIs.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"s3_url":     map[string]any{"type": "string", "description": "S3 URI to the data file, e.g. s3://my-bucket/data/sales.parquet"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"s3_url", "table_name"},
 		},
 	},
 	{
@@ -429,6 +454,31 @@ var mcpToolDefs = []map[string]any{
 				"name":    map[string]any{"type": "string", "description": "Optional new display name for the node"},
 			},
 			"required": []string{"node_id", "sql"},
+		},
+	},
+	{
+		"name":        "set_node_color",
+		"description": "Set the accent color of a canvas node. Use to highlight KPIs, group nodes visually, or flag anomalies.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to recolor"},
+				"color":   map[string]any{"type": "string", "description": "CSS hex color, e.g. #ef4444"},
+			},
+			"required": []string{"node_id", "color"},
+		},
+	},
+	{
+		"name":        "add_section",
+		"description": "Create a named Section container on the canvas to visually group related nodes. Sections appear behind other nodes.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":   map[string]any{"type": "string", "description": "Label for the section"},
+				"width":  map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
+				"height": map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+			},
+			"required": []string{"name"},
 		},
 	},
 	{

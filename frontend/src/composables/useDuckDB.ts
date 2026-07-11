@@ -108,6 +108,16 @@ async function importFromUrl(url: string, tableName: string): Promise<void> {
   return (await getWebImpl()).wasmImportFromUrl(url, tableName)
 }
 
+async function importTableFromJSON(tableName: string, jsonRows: string): Promise<void> {
+  if (IS_DESKTOP) {
+    return GoApp.ImportTableFromJSON(tableName, jsonRows)
+  }
+  // Web (WASM): register as a virtual file and read with DuckDB
+  const buf = new TextEncoder().encode(jsonRows)
+  await registerFile('_sqg_import.json', buf)
+  await exec(`CREATE OR REPLACE TABLE "${tableName}" AS FROM read_json_auto('_sqg_import.json')`)
+}
+
 async function importSqliteFromPath(filePath: string, prefix = ''): Promise<string[]> {
   if (!IS_DESKTOP) throw new Error('importSqliteFromPath not available on web')
   return GoApp.ImportSqliteFromPath(filePath, prefix)
@@ -133,6 +143,6 @@ export function useDuckDB() {
     init, query, exec, getTableInfo,
     registerFile, dropFile,
     copyTableToBuffer, loadExtension,
-    importFromPath, importFromUrl, importSqliteFromPath, openFileDialog,
+    importFromPath, importFromUrl, importTableFromJSON, importSqliteFromPath, openFileDialog,
   }
 }

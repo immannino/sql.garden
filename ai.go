@@ -22,13 +22,17 @@ You have tools to explore data and build the user's canvas autonomously:
 - add_query_node — pin a named SQL query to the canvas; returns a node id
 - add_chart_node — pin a named visualization, optionally sourced from an existing query node via source_id
 - add_markdown_node — pin a markdown note or summary to the canvas
+- materialize_query — snapshot a SQL query's results as a persistent DuckDB table and pin it as a Data node; survives restarts unlike a query node
 - import_file — import a local CSV/Parquet/JSON file into DuckDB and add a table node
 - import_csv_data — load raw CSV text you generate directly into DuckDB; no file on disk needed
 - import_url — fetch a remote CSV/Parquet/JSON by URL into DuckDB; download is server-side so CORS is not a concern
+- import_s3 — load a file from S3, R2, or MinIO directly into DuckDB; uses credentials stored in Settings → S3 Storage; accepts s3:// URIs
 - clear_canvas — remove all nodes from the canvas (use before a full rebuild)
 - fit_view — adjust the canvas viewport: mode="fit" zooms to show all content, mode="reset" sets zoom to 100%
 - focus_node — pan and zoom the viewport to centre on a specific node; use after adding nodes to direct the user's attention
 - update_query_node — overwrite the SQL (and optionally rename) an existing query node by id; avoids delete-and-recreate when only the query changes
+- set_node_color — apply a hex color to any canvas node by id; useful for highlighting KPIs or flagging anomalies
+- add_section — create a named Section container to visually group related nodes
 
 ## Workflow
 1. Always call list_tables first so you know what's available.
@@ -209,12 +213,16 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "markdown"})
 		*actions = append(*actions, CanvasAction{Type: "markdown", NodeID: id, Name: n, Content: c})
 		return fmt.Sprintf("Added markdown node name=%q id=%q", n, id)
+	case "materialize_query":
+		return a.toolMaterializeQuery(input, actions)
 	case "import_file":
 		return a.toolImportFile(input, actions)
 	case "import_csv_data":
 		return a.toolImportCSVData(input, actions)
 	case "import_url":
 		return a.toolImportURL(input, actions)
+	case "import_s3":
+		return a.toolImportS3(input, actions)
 	case "clear_canvas":
 		if a.persist != nil {
 			a.persist.saveCanvasState("[]") //nolint:errcheck
@@ -260,6 +268,31 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 			return fmt.Sprintf("Updated query node %q: new SQL and renamed to %q", id, name)
 		}
 		return fmt.Sprintf("Updated query node %q with new SQL", id)
+	case "set_node_color":
+		id, _ := input["node_id"].(string)
+		color, _ := input["color"].(string)
+		if id == "" || color == "" {
+			return "error: node_id and color are required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "set_color", NodeID: id, Name: color})
+		return fmt.Sprintf("Set color of node %q to %q", id, color)
+	case "add_section":
+		n, _ := input["name"].(string)
+		w, _ := input["width"].(float64)
+		h, _ := input["height"].(float64)
+		if n == "" {
+			return "error: name is required"
+		}
+		if w <= 0 {
+			w = 400
+		}
+		if h <= 0 {
+			h = 300
+		}
+		id := "mcp_" + nodeSlug(n)
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "section"})
+		*actions = append(*actions, CanvasAction{Type: "section", NodeID: id, Name: n, Width: w, Height: h})
+		return fmt.Sprintf("Added section name=%q id=%q size=%gx%g", n, id, w, h)
 	case "fit_view":
 		mode, _ := input["mode"].(string)
 		if mode == "" {
@@ -273,6 +306,45 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 	default:
 		return "unknown tool: " + name
 	}
+}
+
+func (a *App) toolMaterializeQuery(input map[string]any, actions *[]CanvasAction) string {
+	tableName, _ := input["table_name"].(string)
+	sql, _ := input["sql"].(string)
+	sourceID, _ := input["source_id"].(string)
+	if tableName == "" || sql == "" {
+		return "error: table_name and sql are required"
+	}
+	sql = strings.TrimRight(strings.TrimSpace(sql), ";")
+	safe := escapeDoubleQuote(tableName)
+	if _, err := a.duck.ExecContext(a.ctx, fmt.Sprintf(`CREATE OR REPLACE TABLE "%s" AS (%s)`, safe, sql)); err != nil {
+		return "error materializing query: " + err.Error()
+	}
+	cols, err := a.GetTableInfo(tableName)
+	if err != nil {
+		return fmt.Sprintf("materialized %q but couldn't read schema: %v", tableName, err)
+	}
+	var rowCount int64
+	a.duck.QueryRowContext(a.ctx, fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, safe)).Scan(&rowCount) //nolint:errcheck
+	if err := a.SaveTableData(tableName); err != nil {
+		fmt.Printf("mcp materialize_query: SaveTableData failed: %v\n", err)
+	}
+	canvasCols := make([]CanvasColumn, len(cols))
+	for i, c := range cols {
+		canvasCols[i] = CanvasColumn{Name: c.Name, Type: c.Type}
+	}
+	id := "mcp_" + nodeSlug(tableName)
+	a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: tableName, Kind: "data"})
+	*actions = append(*actions, CanvasAction{
+		Type:     "data",
+		NodeID:   id,
+		Name:     tableName,
+		SQL:      sql,
+		SourceID: sourceID,
+		Columns:  canvasCols,
+		RowCount: rowCount,
+	})
+	return fmt.Sprintf("Materialized %q: %d rows, %d columns, id=%q — queryable as a DuckDB table", tableName, rowCount, len(cols), id)
 }
 
 func (a *App) toolImportFile(input map[string]any, actions *[]CanvasAction) string {
@@ -390,6 +462,24 @@ func (a *App) toolImportURL(input map[string]any, actions *[]CanvasAction) strin
 	return a.toolFinishImport(tableName, "import_url", actions)
 }
 
+func (a *App) toolImportS3(input map[string]any, actions *[]CanvasAction) string {
+	s3URL, _ := input["s3_url"].(string)
+	tableName, _ := input["table_name"].(string)
+	if s3URL == "" || tableName == "" {
+		return "error: s3_url and table_name are required"
+	}
+	if !strings.HasPrefix(s3URL, "s3://") {
+		return "error: s3_url must start with s3://"
+	}
+
+	safe := escapeDoubleQuote(tableName)
+	a.duck.ExecContext(a.ctx, fmt.Sprintf(`DROP TABLE IF EXISTS "%s"`, safe)) //nolint:errcheck
+	if err := a.ImportFromUrl(s3URL, tableName); err != nil {
+		return "error importing from S3: " + err.Error()
+	}
+	return a.toolFinishImport(tableName, "import_s3", actions)
+}
+
 // toolFinishImport handles the shared post-import steps: persist, read schema,
 // count rows, and emit a canvas table action.
 func (a *App) toolFinishImport(tableName, toolName string, actions *[]CanvasAction) string {
@@ -436,9 +526,8 @@ func nodeSlug(name string) string {
 }
 
 func (a *App) toolListCanvasNodes() string {
-	// Build a merged map: SQLite (persisted) overlaid by the session registry
-	// (nodes added this session that may not yet be auto-saved by the frontend).
-	merged := make(map[string]string) // id → name, query nodes only
+	type entry struct{ name, kind string }
+	merged := make(map[string]entry) // id → {name, kind}
 
 	// 1. Persisted canvas state (authoritative for nodes added before this session)
 	if a.persist != nil {
@@ -450,8 +539,8 @@ func (a *App) toolListCanvasNodes() string {
 			}
 			if json.Unmarshal([]byte(raw), &nodes) == nil {
 				for _, n := range nodes {
-					if n.Kind == "query" {
-						merged[n.ID] = n.Name
+					if n.Kind == "query" || n.Kind == "data" {
+						merged[n.ID] = entry{name: n.Name, kind: n.Kind}
 					}
 				}
 			}
@@ -462,18 +551,18 @@ func (a *App) toolListCanvasNodes() string {
 	//    frontend auto-save (1 s debounce) has written them back to SQLite.
 	a.mcpNodeRegistry.Range(func(k, v any) bool {
 		e := v.(mcpNodeEntry)
-		if e.Kind == "query" {
-			merged[e.ID] = e.Name
+		if e.Kind == "query" || e.Kind == "data" {
+			merged[e.ID] = entry{name: e.Name, kind: e.Kind}
 		}
 		return true
 	})
 
 	if len(merged) == 0 {
-		return "No query nodes on canvas yet."
+		return "No query or data nodes on canvas yet."
 	}
 	var sb strings.Builder
-	for id, name := range merged {
-		fmt.Fprintf(&sb, "query id=%q name=%q\n", id, name)
+	for id, e := range merged {
+		fmt.Fprintf(&sb, "%s id=%q name=%q\n", e.kind, id, e.name)
 	}
 	return sb.String()
 }
@@ -622,6 +711,19 @@ var anthropicTools = []map[string]any{
 		},
 	},
 	{
+		"name":        "materialize_query",
+		"description": "Snapshot a SQL query's results into a named DuckDB table and pin it to the canvas as a persistent Data node. Unlike add_query_node (which re-runs SQL on demand), a Data node stores a snapshot that survives app restarts and can be queried directly. Use for expensive aggregations or stable reference datasets.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"table_name": map[string]any{"type": "string", "description": "DuckDB table name for the snapshot (snake_case recommended)"},
+				"sql":        map[string]any{"type": "string", "description": "SQL query whose results are materialized — do not include a trailing semicolon"},
+				"source_id":  map[string]any{"type": "string", "description": "Optional ID of a query node this was derived from, used for canvas linking"},
+			},
+			"required": []string{"table_name", "sql"},
+		},
+	},
+	{
 		"name":        "import_file",
 		"description": "Import a local CSV, Parquet, or JSON file into DuckDB and add it as a table node on the canvas.",
 		"input_schema": map[string]any{
@@ -658,6 +760,18 @@ var anthropicTools = []map[string]any{
 		},
 	},
 	{
+		"name":        "import_s3",
+		"description": "Load a file from S3, Cloudflare R2, MinIO, or any S3-compatible store into DuckDB and add it as a canvas node. Credentials must be configured in Settings → S3 Storage. Accepts s3:// URIs.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"s3_url":     map[string]any{"type": "string", "description": "S3 URI to the data file, e.g. s3://my-bucket/data/sales.parquet"},
+				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+			},
+			"required": []string{"s3_url", "table_name"},
+		},
+	},
+	{
 		"name":        "focus_node",
 		"description": "Pan and zoom the canvas viewport to centre on a specific node. Call after adding nodes to direct the user's attention to the most important result.",
 		"input_schema": map[string]any{
@@ -679,6 +793,31 @@ var anthropicTools = []map[string]any{
 				"name":    map[string]any{"type": "string", "description": "Optional new display name for the node"},
 			},
 			"required": []string{"node_id", "sql"},
+		},
+	},
+	{
+		"name":        "set_node_color",
+		"description": "Set the accent color of a canvas node. Use to highlight KPIs, group nodes visually, or flag anomalies.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to recolor"},
+				"color":   map[string]any{"type": "string", "description": "CSS hex color, e.g. #ef4444"},
+			},
+			"required": []string{"node_id", "color"},
+		},
+	},
+	{
+		"name":        "add_section",
+		"description": "Create a named Section container on the canvas to visually group related nodes. Sections appear behind other nodes.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":   map[string]any{"type": "string", "description": "Label for the section"},
+				"width":  map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
+				"height": map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+			},
+			"required": []string{"name"},
 		},
 	},
 	{

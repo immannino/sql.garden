@@ -20,6 +20,7 @@ export interface TableNode {
   columns: Column[]
   color: string
   rowCount?: number
+  columnCasts?: Record<string, { type: string; expr: string }>
   w?: number
   h?: number
   viewMode?: ViewMode
@@ -126,7 +127,24 @@ export interface SectionNode {
   viewMode?: ViewMode
 }
 
-export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode
+export interface DataNode {
+  kind: 'data'
+  id: string
+  name: string          // also the DuckDB table name
+  x: number
+  y: number
+  color: string
+  columns: Column[]
+  rowCount?: number
+  sourceId?: string     // QueryNode that created this
+  sourceSql?: string    // SQL used at materialize time — for stale detection
+  w?: number
+  h?: number
+  viewMode?: ViewMode
+  columnCasts?: Record<string, { type: string; expr: string }>
+}
+
+export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode | DataNode
 
 const PALETTE = [
   '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
@@ -198,6 +216,22 @@ export const useSchemaStore = defineStore('schema', () => {
     if (nodes.value.some((n) => n.id === node.id)) return
     snapshot()
     nodes.value.unshift({ kind: 'section', ...node, color: nextColor(node.color) })
+  }
+
+  function addDataNode(node: Omit<DataNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
+    nodes.value.push({ kind: 'data', ...node, color: nextColor(node.color) })
+  }
+
+  function updateDataNode(id: string, updates: Partial<Pick<DataNode, 'columns' | 'rowCount' | 'sourceSql' | 'name' | 'columnCasts'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'data') Object.assign(n, updates)
+  }
+
+  function updateTableNode(id: string, updates: Partial<Pick<TableNode, 'columns' | 'rowCount' | 'columnCasts'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'table') Object.assign(n, updates)
   }
 
   function updatePosition(id: string, x: number, y: number) {
@@ -333,6 +367,9 @@ export const useSchemaStore = defineStore('schema', () => {
         conditions: src.conditions ? src.conditions.map((r) => ({ ...r })) : undefined }
     } else if (src.kind === 'markdown') {
       clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET }
+    } else if (src.kind === 'data') {
+      clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET,
+        columns: src.columns.map((c) => ({ ...c })) }
     } else {
       clone = { ...src, id: newId, name, x: src.x + OFFSET, y: src.y + OFFSET }
     }
@@ -355,7 +392,7 @@ export const useSchemaStore = defineStore('schema', () => {
 
   return {
     nodes,
-    addTable, addQueryNode, addChartNode, addMarkdownNode, addSection,
+    addTable, addQueryNode, addChartNode, addMarkdownNode, addSection, addDataNode, updateDataNode, updateTableNode,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     moveNodeToIndex, bringToFront, sendToBack,
     setRowCount, updateQuerySql, pushQueryHistory, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,

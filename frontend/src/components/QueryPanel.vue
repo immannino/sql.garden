@@ -43,16 +43,14 @@ const isRefreshingStats = ref(false)
 /** Refresh row counts for every table currently in the schema store. */
 async function refreshStats() {
   isRefreshingStats.value = true
-  const tables = schemaStore.nodes.filter((n) => n.kind === 'table')
+  const countable = schemaStore.nodes.filter((n) => n.kind === 'table' || n.kind === 'data')
   await Promise.allSettled(
-    tables.map(async (table) => {
+    countable.map(async (node) => {
       try {
-        const r = await query(`SELECT COUNT(*) AS n FROM "${table.name}"`)
+        const r = await query(`SELECT COUNT(*) AS n FROM "${node.name}"`)
         const count = r.rows[0]?.n
-        if (count !== undefined) schemaStore.setRowCount(table.id, Number(count))
-      } catch {
-        // Table may not exist in DuckDB (manually added node, etc.)
-      }
+        if (count !== undefined) schemaStore.setRowCount(node.id, Number(count))
+      } catch { /* table may not exist */ }
     }),
   )
   isRefreshingStats.value = false
@@ -201,7 +199,7 @@ defineExpose({ refreshStats })
           <line x1="5" y1="5" x2="5" y2="13" stroke="currentColor" stroke-width="1.3"/>
         </svg>
         Schema
-        <span class="tab-count">{{ schemaStore.nodes.filter(n => n.kind === 'table').length }}</span>
+        <span class="tab-count">{{ schemaStore.nodes.filter(n => n.kind === 'table' || n.kind === 'data' || n.kind === 'query').length }}</span>
       </button>
       <div class="tab-spacer" />
       <button class="close-btn" title="Hide panel" @click="emit('close')">
@@ -309,7 +307,7 @@ defineExpose({ refreshStats })
     <!-- ── Schema tab ────────────────────────────────────────────────────── -->
     <template v-else-if="activeTab === 'schema'">
       <div class="schema-header">
-        <span class="schema-title">{{ schemaStore.nodes.filter(n => n.kind === 'table').length }} tables</span>
+        <span class="schema-title">{{ schemaStore.nodes.filter(n => n.kind === 'table' || n.kind === 'data' || n.kind === 'query').length }} nodes</span>
         <button
           class="refresh-btn"
           :class="{ spinning: isRefreshingStats }"
@@ -318,51 +316,69 @@ defineExpose({ refreshStats })
           @click="refreshStats"
         >
           <svg viewBox="0 0 14 14" fill="none" :class="{ spin: isRefreshingStats }">
-            <path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <polyline points="12,2 12,6 8,6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M12 7A5 5 0 1 0 9.5 11.33" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <polyline points="12,3.4 12,7 8.4,7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           Refresh
         </button>
       </div>
 
       <div class="schema-list">
-        <div v-if="!schemaStore.nodes.filter(n => n.kind === 'table').length" class="empty-state">
-          No tables yet — create one with SQL or upload a CSV
+        <div v-if="!schemaStore.nodes.filter(n => n.kind === 'table' || n.kind === 'data' || n.kind === 'query').length" class="empty-state">
+          No nodes yet
         </div>
 
-        <div
-          v-for="table in schemaStore.nodes.filter(n => n.kind === 'table')"
-          :key="table.id"
-          class="table-row"
-          @click="selectTable(table.name)"
-        >
-          <span class="table-dot" :style="{ background: table.color }" />
-          <span class="table-name">{{ table.name }}</span>
-          <span class="table-stats">
-            <span class="stat-cols">{{ table.columns.length }}c</span>
-            <span class="stat-sep">·</span>
-            <span class="stat-rows" v-if="table.rowCount !== undefined">
-              {{ table.rowCount.toLocaleString() }}r
+        <template v-for="node in schemaStore.nodes.filter(n => n.kind === 'table' || n.kind === 'data' || n.kind === 'query')" :key="node.id">
+          <!-- Table node -->
+          <div v-if="node.kind === 'table'" class="table-row" @click="selectTable(node.name)">
+            <span class="table-dot" :style="{ background: node.color }" />
+            <span class="table-name">{{ node.name }}</span>
+            <span class="table-stats">
+              <span class="stat-cols">{{ node.columns.length }}c</span>
+              <span class="stat-sep">·</span>
+              <span class="stat-rows" v-if="node.rowCount !== undefined">{{ node.rowCount.toLocaleString() }}r</span>
+              <span class="stat-rows loading" v-else>…</span>
             </span>
-            <span class="stat-rows loading" v-else>…</span>
-          </span>
-          <svg class="table-arrow" viewBox="0 0 10 10" fill="none">
-            <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <button
-            class="schema-delete-btn"
-            :class="{ confirming: confirmingDelete === table.id }"
-            :title="confirmingDelete === table.id ? 'Click again to confirm' : 'Delete table'"
-            @click.stop="onSchemaDeleteClick($event, table.id, table.name)"
-          >
-            <span v-if="confirmingDelete === table.id">Delete?</span>
-            <svg v-else viewBox="0 0 12 12" fill="none">
-              <path d="M2 3.5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-              <path d="M4.5 3.5V2.5h3v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M3.5 3.5l.7 6h3.6l.7-6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <svg class="table-arrow" viewBox="0 0 10 10" fill="none">
+              <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-          </button>
-        </div>
+            <button
+              class="schema-delete-btn"
+              :class="{ confirming: confirmingDelete === node.id }"
+              :title="confirmingDelete === node.id ? 'Click again to confirm' : 'Delete table'"
+              @click.stop="onSchemaDeleteClick($event, node.id, node.name)"
+            >
+              <span v-if="confirmingDelete === node.id">Delete?</span>
+              <svg v-else viewBox="0 0 12 12" fill="none">
+                <path d="M2 3.5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <path d="M4.5 3.5V2.5h3v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M3.5 3.5l.7 6h3.6l.7-6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          <!-- Data node (materialized table) -->
+          <div v-else-if="node.kind === 'data'" class="table-row" @click="selectTable(node.name)">
+            <span class="table-kind-badge kind-data">data</span>
+            <span class="table-name">{{ node.name }}</span>
+            <span class="table-stats">
+              <span class="stat-cols">{{ node.columns.length }}c</span>
+              <span class="stat-sep">·</span>
+              <span class="stat-rows" v-if="node.rowCount !== undefined">{{ node.rowCount.toLocaleString() }}r</span>
+              <span class="stat-rows loading" v-else>…</span>
+            </span>
+            <svg class="table-arrow" viewBox="0 0 10 10" fill="none">
+              <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <!-- Query node -->
+          <div v-else-if="node.kind === 'query'" class="table-row" @click="sql = node.sql; activeTab = 'query'">
+            <span class="table-kind-badge kind-query">{{ node.isView ? 'view' : 'query' }}</span>
+            <span class="table-name">{{ node.name }}</span>
+            <svg class="table-arrow" viewBox="0 0 10 10" fill="none">
+              <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+        </template>
       </div>
     </template>
   </div>
@@ -822,6 +838,24 @@ defineExpose({ refreshStats })
   font-size: 10px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.table-kind-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.kind-data { background: rgba(6, 182, 212, 0.15); color: #06b6d4; }
+.kind-query { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+
+.tab-btn, .schema-title, .schema-delete-btn, .refresh-btn,
+.close-btn, .run-btn, .create-btn, .table-name, .table-stats,
+.table-kind-badge, .results-meta, .meta-rows, .meta-time {
+  user-select: none;
 }
 
 /* ── Shared ───────────────────────────────────────────────────────────────── */

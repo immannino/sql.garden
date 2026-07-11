@@ -5,13 +5,13 @@ import { usePrefs } from '../composables/usePrefs'
 import { IS_DESKTOP } from '../lib/env'
 import type { main } from '../../wailsjs/go/models'
 
-const props = defineProps<{ initialTab?: 'appearance' | 'mcp' | 'updates' }>()
+const props = defineProps<{ initialTab?: 'appearance' | 'mcp' | 'updates' | 's3' | 'changelog' }>()
 const emit = defineEmits<{ close: [] }>()
 
 const { theme, setTheme } = useTheme()
 const { showGrid } = usePrefs()
 
-type Tab = 'appearance' | 'mcp' | 'updates'
+type Tab = 'appearance' | 'mcp' | 'updates' | 's3' | 'changelog'
 const activeTab = ref<Tab>(props.initialTab ?? 'appearance')
 
 // ── MCP ───────────────────────────────────────────────────────────────────────
@@ -106,15 +106,89 @@ async function checkForUpdates() {
   }
 }
 
+// ── S3 Credentials ────────────────────────────────────────────────────────────
+const s3Creds = ref({ key: '', secret: '', region: 'us-east-1', endpoint: '' })
+const s3Saving = ref(false)
+const s3SaveResult = ref<'ok' | 'err' | null>(null)
+
+async function loadS3Creds() {
+  if (!IS_DESKTOP) return
+  const { GetS3Credentials } = await import('../../wailsjs/go/main/App')
+  const c = await GetS3Credentials()
+  s3Creds.value = { key: c.key ?? '', secret: c.secret ?? '', region: c.region || 'us-east-1', endpoint: c.endpoint ?? '' }
+}
+
+async function saveS3Creds() {
+  if (s3Saving.value) return
+  s3Saving.value = true; s3SaveResult.value = null
+  try {
+    const { SaveS3Credentials } = await import('../../wailsjs/go/main/App')
+    await SaveS3Credentials(s3Creds.value)
+    s3SaveResult.value = 'ok'
+  } catch {
+    s3SaveResult.value = 'err'
+  } finally {
+    s3Saving.value = false
+    setTimeout(() => { s3SaveResult.value = null }, 3000)
+  }
+}
+
+// ── Changelog ─────────────────────────────────────────────────────────────────
+interface ReleaseEntry {
+  tag_name: string
+  name: string
+  body: string
+  published_at: string
+  html_url: string
+}
+
+const releases = ref<ReleaseEntry[]>([])
+const changelogLoading = ref(false)
+const changelogError = ref(false)
+
+function retryChangelog() {
+  releases.value = []
+  changelogError.value = false
+  loadChangelog()
+}
+
+async function loadChangelog() {
+  if (changelogLoading.value || releases.value.length > 0) return
+  changelogLoading.value = true
+  changelogError.value = false
+  try {
+    const res = await fetch('https://api.github.com/repos/immannino/sql.garden/releases?per_page=10', {
+      headers: { 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    releases.value = await res.json()
+  } catch {
+    changelogError.value = true
+  } finally {
+    changelogLoading.value = false
+  }
+}
+
+function formatReleaseDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  } catch {
+    return iso
+  }
+}
+
 watch(activeTab, (tab) => {
   if (tab === 'updates' && !updateInfo.value && !checkingUpdate.value) checkForUpdates()
   if (tab === 'mcp' && !mcpConfigStatus.value) loadMCPStatus()
+  if (tab === 's3' && !s3Creds.value.key && !s3Creds.value.secret) loadS3Creds()
+  if (tab === 'changelog') loadChangelog()
 })
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 onMounted(() => {
   window.addEventListener('keydown', onKey)
   if (activeTab.value === 'mcp') loadMCPStatus()
+  if (activeTab.value === 'changelog') loadChangelog()
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 
@@ -162,6 +236,14 @@ function onBackdrop(e: MouseEvent) {
             </svg>
             MCP
           </button>
+          <button v-if="IS_DESKTOP" :class="['nav-item', { active: activeTab === 's3' }]" @click="activeTab = 's3'">
+            <svg viewBox="0 0 16 16" fill="none">
+              <ellipse cx="8" cy="4.5" rx="5.5" ry="2" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M2.5 4.5v7c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2v-7" stroke="currentColor" stroke-width="1.3"/>
+              <path d="M2.5 8c0 1.1 2.46 2 5.5 2s5.5-.9 5.5-2" stroke="currentColor" stroke-width="1.3" opacity="0.5"/>
+            </svg>
+            S3 Storage
+          </button>
           <button v-if="IS_DESKTOP" :class="['nav-item', { active: activeTab === 'updates' }]" @click="activeTab = 'updates'">
             <span class="nav-icon-wrap">
               <svg viewBox="0 0 16 16" fill="none">
@@ -172,6 +254,12 @@ function onBackdrop(e: MouseEvent) {
               <span v-if="updateInfo?.hasUpdate" class="update-dot" />
             </span>
             Updates
+          </button>
+          <button :class="['nav-item', { active: activeTab === 'changelog' }]" @click="activeTab = 'changelog'">
+            <svg viewBox="0 0 16 16" fill="none">
+              <path d="M2 3h12M2 6h9M2 9h11M2 12h7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+            What's New
           </button>
         </nav>
 
@@ -306,6 +394,72 @@ function onBackdrop(e: MouseEvent) {
             <p class="pane-desc update-note">
               sql.garden doesn't auto-update yet. Download the latest release from GitHub and replace the existing app.
             </p>
+          </template>
+
+          <!-- S3 Credentials -->
+          <template v-else-if="activeTab === 's3'">
+            <h3 class="pane-title">S3 / Object Storage</h3>
+            <p class="pane-desc">Configure credentials for importing files from <code>s3://</code> URLs. Works with AWS S3, Cloudflare R2, MinIO, and any S3-compatible store.</p>
+
+            <div class="field-group">
+              <label class="field-label">Access Key ID</label>
+              <input v-model="s3Creds.key" class="settings-input" type="text" placeholder="AKIAIOSFODNN7EXAMPLE" autocomplete="off" spellcheck="false" />
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Secret Access Key</label>
+              <input v-model="s3Creds.secret" class="settings-input" type="password" placeholder="••••••••••••••••••••••••••••••••••••••••" autocomplete="off" />
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Region</label>
+              <input v-model="s3Creds.region" class="settings-input" type="text" placeholder="us-east-1" />
+            </div>
+
+            <div class="field-group">
+              <label class="field-label">Endpoint URL <span class="field-optional">(optional — leave blank for AWS)</span></label>
+              <input v-model="s3Creds.endpoint" class="settings-input" type="text" placeholder="https://your-account.r2.cloudflarestorage.com" />
+            </div>
+
+            <div class="field-group field-row">
+              <button class="save-btn" :disabled="s3Saving" @click="saveS3Creds">
+                {{ s3Saving ? 'Saving…' : 'Save Credentials' }}
+              </button>
+              <span v-if="s3SaveResult === 'ok'" class="save-ok">Saved</span>
+              <span v-else-if="s3SaveResult === 'err'" class="save-err">Failed to save</span>
+            </div>
+
+            <p class="pane-tip">Once configured, paste any <code>s3://bucket/path/file.parquet</code> URL into the import modal's URL tab.</p>
+          </template>
+
+          <!-- Changelog / What's New -->
+          <template v-if="activeTab === 'changelog'">
+            <h3 class="pane-title">What's New</h3>
+
+            <div v-if="changelogLoading" class="update-checking">
+              <span class="spinner" />
+              Loading releases…
+            </div>
+
+            <div v-else-if="changelogError" class="update-row">
+              <span class="update-badge error">Could not load — no internet?</span>
+              <button class="retry-btn" @click="retryChangelog">Retry</button>
+            </div>
+
+            <div v-else-if="releases.length === 0" class="update-checking">
+              No releases found.
+            </div>
+
+            <div v-else class="changelog-list">
+              <div v-for="rel in releases" :key="rel.tag_name" class="changelog-entry">
+                <div class="changelog-header">
+                  <a class="changelog-tag" :href="rel.html_url" target="_blank">{{ rel.tag_name }}</a>
+                  <span class="changelog-date">{{ formatReleaseDate(rel.published_at) }}</span>
+                </div>
+                <pre v-if="rel.body" class="changelog-body">{{ rel.body.trim() }}</pre>
+                <p v-else class="changelog-empty">No release notes.</p>
+              </div>
+            </div>
           </template>
 
         </div>
@@ -729,4 +883,121 @@ function onBackdrop(e: MouseEvent) {
 }
 .write-result.ok { color: var(--success); }
 .write-result.err { color: var(--danger, #f85149); }
+
+/* S3 credentials pane */
+.settings-input {
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--surface-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.settings-input:focus { border-color: var(--accent); }
+
+.field-optional {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.field-row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.save-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  transition: opacity 0.15s;
+}
+.save-btn:hover:not(:disabled) { opacity: 0.88; }
+.save-btn:disabled { opacity: 0.55; }
+
+.save-ok {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--success);
+}
+.save-err {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--danger, #f85149);
+}
+
+.pane-tip {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.pane-tip code { font-family: var(--font-mono); font-style: normal; }
+
+/* Changelog */
+.changelog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  max-height: 380px;
+  padding-right: 4px;
+}
+
+.changelog-entry {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.changelog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.changelog-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.changelog-tag:hover { text-decoration: underline; }
+
+.changelog-date {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.changelog-body {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.changelog-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 </style>

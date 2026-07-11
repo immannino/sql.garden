@@ -16,6 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	_ "github.com/marcboeker/go-duckdb"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
@@ -27,7 +31,7 @@ import (
 type mcpNodeEntry struct {
 	ID   string
 	Name string
-	Kind string // "query" | "chart" | "markdown" | "table"
+	Kind string // "query" | "chart" | "markdown" | "table" | "data"
 }
 
 // App holds all application state. Every exported method becomes a callable
@@ -84,19 +88,6 @@ func (a *App) buildMenu() *menu.Menu {
 	file.AddSeparator()
 	file.AddText("Import…", keys.CmdOrCtrl("i"), a.emit("menu:import"))
 
-	// ── Edit ─────────────────────────────────────────────────────────────────
-	// nil callbacks let macOS route these through the WKWebView responder chain
-	// so standard clipboard shortcuts work inside text fields and code editors.
-	edit := m.AddSubmenu("Edit")
-	edit.AddText("Undo", keys.CmdOrCtrl("z"), nil)
-	edit.AddText("Redo", keys.Combo("z", keys.CmdOrCtrlKey, keys.ShiftKey), nil)
-	edit.AddSeparator()
-	edit.AddText("Cut", keys.CmdOrCtrl("x"), nil)
-	edit.AddText("Copy", keys.CmdOrCtrl("c"), nil)
-	edit.AddText("Paste", keys.CmdOrCtrl("v"), nil)
-	edit.AddSeparator()
-	edit.AddText("Select All", keys.CmdOrCtrl("a"), nil)
-
 	// ── View ──────────────────────────────────────────────────────────────────
 	view := m.AddSubmenu("View")
 	view.AddText("Fit View", keys.Combo("f", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:fit-view"))
@@ -145,6 +136,39 @@ func (a *App) LoadCanvasState() (string, error) {
 		return "", nil
 	}
 	return a.persist.loadCanvasState()
+}
+
+// ReadTextFile reads a local file and returns its contents as a UTF-8 string.
+// Used by the frontend to read dropped .sql.garden.json node bundles.
+func (a *App) ReadTextFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading file: %w", err)
+	}
+	return string(b), nil
+}
+
+// ImportTableFromJSON creates a DuckDB table from a JSON array of row objects and
+// persists it as parquet. Used when restoring exported node bundles that embed data.
+func (a *App) ImportTableFromJSON(tableName, jsonRows string) error {
+	tmp, err := os.CreateTemp("", "sqg_import_*.json")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(jsonRows); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing import data: %w", err)
+	}
+	tmp.Close()
+	safeTable := escapeDoubleQuote(tableName)
+	safePath := escapeSingleQuote(tmp.Name())
+	if _, err := a.duck.ExecContext(a.ctx,
+		fmt.Sprintf(`CREATE OR REPLACE TABLE "%s" AS FROM read_json_auto('%s')`, safeTable, safePath),
+	); err != nil {
+		return fmt.Errorf("loading table from JSON: %w", err)
+	}
+	return a.SaveTableData(tableName)
 }
 
 // SaveTableData copies a DuckDB table to a parquet file and records its path.
@@ -254,6 +278,19 @@ func (a *App) ConnectSaved(id string) (string, error) {
 		return "", err
 	}
 
+	// S3 connections use httpfs secrets instead of DuckDB ATTACH.
+	if strings.EqualFold(conn.Type, "s3") {
+		var cfg S3ConnConfig
+		if err := json.Unmarshal([]byte(conn.DSN), &cfg); err != nil {
+			return "", fmt.Errorf("invalid S3 connection config: %w", err)
+		}
+		secretName := "sqg_s3_" + sanitizeAlias(conn.Name)
+		if err := a.createS3Secret(secretName, cfg); err != nil {
+			return "", fmt.Errorf("setting up S3 connection: %w", err)
+		}
+		return sanitizeAlias(conn.Name), nil
+	}
+
 	switch strings.ToLower(conn.Type) {
 	case "postgres":
 		if err := a.LoadExtension("postgres"); err != nil {
@@ -292,6 +329,7 @@ func (a *App) ConnectSaved(id string) (string, error) {
 }
 
 // DisconnectSaved DETACHes a previously connected saved connection.
+// For S3 connections it drops the associated httpfs secret instead.
 func (a *App) DisconnectSaved(id string) error {
 	if a.persist == nil {
 		return nil
@@ -299,6 +337,11 @@ func (a *App) DisconnectSaved(id string) error {
 	conn, err := a.persist.getConnection(id)
 	if err != nil {
 		return err
+	}
+	if strings.EqualFold(conn.Type, "s3") {
+		secretName := "sqg_s3_" + sanitizeAlias(conn.Name)
+		_, _ = a.duck.ExecContext(a.ctx, fmt.Sprintf("DROP SECRET IF EXISTS %s", sanitizeAlias(secretName)))
+		return nil
 	}
 	return a.DetachDatabase(sanitizeAlias(conn.Name))
 }
@@ -343,15 +386,15 @@ func (a *App) GetDatabaseSchemas(alias string) ([]SchemaInfo, error) {
 }
 
 func (a *App) GetSchemaTables(alias, schema string) ([]TableInfo, error) {
-	rows, err := a.duck.QueryContext(a.ctx,
-		`SELECT table_name AS name, 'table' AS kind FROM duckdb_tables()
-		 WHERE database_name = ? AND schema_name = ? AND internal = false
-		 UNION ALL
-		 SELECT view_name AS name, 'view' AS kind FROM duckdb_views()
-		 WHERE database_name = ? AND schema_name = ? AND internal = false
+	q := fmt.Sprintf(
+		`SELECT table_name AS name,
+		        CASE table_type WHEN 'VIEW' THEN 'view' ELSE 'table' END AS kind
+		 FROM "%s".information_schema.tables
+		 WHERE table_schema = ?
 		 ORDER BY kind, name`,
-		alias, schema, alias, schema,
+		escapeDoubleQuote(alias),
 	)
+	rows, err := a.duck.QueryContext(a.ctx, q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +482,181 @@ func (a *App) SaveAppSettings(s AppSettings) error {
 		return err
 	}
 	return a.persist.saveSetting(appSettingsKey, string(raw))
+}
+
+// ── S3 credentials ────────────────────────────────────────────────────────────
+
+type S3Credentials struct {
+	Key      string `json:"key"`
+	Secret   string `json:"secret"`
+	Region   string `json:"region"`
+	Endpoint string `json:"endpoint"` // optional; leave blank for AWS
+}
+
+// S3ConnConfig is stored as JSON in the DSN field of an S3 connection record.
+type S3ConnConfig struct {
+	Bucket   string `json:"bucket"`
+	Prefix   string `json:"prefix"`
+	Key      string `json:"key"`
+	Secret   string `json:"secret"`
+	Region   string `json:"region"`
+	Endpoint string `json:"endpoint"`
+}
+
+// S3Object represents a single importable file in an S3 bucket.
+type S3Object struct {
+	Key          string `json:"key"`          // full path within bucket (e.g. "data/sales.csv")
+	Name         string `json:"name"`         // basename (e.g. "sales.csv")
+	Ext          string `json:"ext"`          // lowercase extension (e.g. ".csv")
+	LastModified int64  `json:"lastModified"` // Unix seconds
+	Size         int64  `json:"size"`         // bytes
+}
+
+var s3ImportableExts = map[string]bool{
+	".parquet": true, ".csv": true,
+	".json": true, ".jsonl": true, ".ndjson": true,
+}
+
+// createS3Secret installs httpfs and creates a scoped DuckDB secret for one S3 connection.
+func (a *App) createS3Secret(secretName string, cfg S3ConnConfig) error {
+	if _, err := a.duck.ExecContext(a.ctx, `INSTALL httpfs; LOAD httpfs`); err != nil {
+		return fmt.Errorf("loading httpfs: %w", err)
+	}
+	var parts []string
+	parts = append(parts, "TYPE S3")
+	if cfg.Key != "" {
+		parts = append(parts,
+			fmt.Sprintf("KEY_ID '%s'", escapeSingleQuote(cfg.Key)),
+			fmt.Sprintf("SECRET '%s'", escapeSingleQuote(cfg.Secret)),
+		)
+	} else {
+		// No explicit credentials — fall back to the AWS credential chain
+		// (~/.aws/credentials, env vars, instance metadata, etc.)
+		parts = append(parts, "PROVIDER credential_chain")
+	}
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	parts = append(parts, fmt.Sprintf("REGION '%s'", escapeSingleQuote(region)))
+	if cfg.Endpoint != "" {
+		parts = append(parts,
+			fmt.Sprintf("ENDPOINT '%s'", escapeSingleQuote(cfg.Endpoint)),
+			"URL_STYLE 'path'",
+		)
+	}
+	if cfg.Bucket != "" {
+		parts = append(parts, fmt.Sprintf("SCOPE 's3://%s'", escapeSingleQuote(cfg.Bucket)))
+	}
+	_, err := a.duck.ExecContext(a.ctx,
+		fmt.Sprintf("CREATE OR REPLACE SECRET %s (%s)", sanitizeAlias(secretName), strings.Join(parts, ", ")))
+	return err
+}
+
+// ListS3Objects lists importable files in an S3 connection's bucket using the
+// native AWS SDK. Listing is independent of DuckDB — pagination, credential
+// chain, and S3-compatible endpoints all work correctly.
+func (a *App) ListS3Objects(id string) ([]S3Object, error) {
+	if a.persist == nil {
+		return nil, fmt.Errorf("persistence not available")
+	}
+	conn, err := a.persist.getConnection(id)
+	if err != nil {
+		return nil, err
+	}
+	var cfg S3ConnConfig
+	if err := json.Unmarshal([]byte(conn.DSN), &cfg); err != nil {
+		return nil, fmt.Errorf("invalid S3 config: %w", err)
+	}
+
+	// Build AWS config — explicit credentials take priority; otherwise fall
+	// back to the full credential chain (env vars, ~/.aws/credentials, etc.).
+	var awsCfg aws.Config
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	if cfg.Key != "" {
+		awsCfg, err = config.LoadDefaultConfig(a.ctx,
+			config.WithRegion(region),
+			config.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(cfg.Key, cfg.Secret, ""),
+			),
+		)
+	} else {
+		awsCfg, err = config.LoadDefaultConfig(a.ctx, config.WithRegion(region))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("building AWS config: %w", err)
+	}
+
+	s3Opts := []func(*s3.Options){}
+	if cfg.Endpoint != "" {
+		endpoint := cfg.Endpoint
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.BaseEndpoint = &endpoint
+			o.UsePathStyle = true // required for MinIO / R2
+		})
+	}
+
+	client := s3.NewFromConfig(awsCfg, s3Opts...)
+	paginator := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
+		Bucket: &cfg.Bucket,
+		Prefix: &cfg.Prefix,
+	})
+
+	var objects []S3Object
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(a.ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing S3 objects: %w", err)
+		}
+		for _, obj := range page.Contents {
+			key := aws.ToString(obj.Key)
+			ext := strings.ToLower(filepath.Ext(key))
+			if !s3ImportableExts[ext] {
+				continue
+			}
+			var lm int64
+			if obj.LastModified != nil {
+				lm = obj.LastModified.Unix()
+			}
+			var sz int64
+			if obj.Size != nil {
+				sz = *obj.Size
+			}
+			objects = append(objects, S3Object{Key: key, Name: filepath.Base(key), Ext: ext, LastModified: lm, Size: sz})
+		}
+	}
+	return objects, nil
+}
+
+const s3CredentialsKey = "s3_credentials"
+
+func (a *App) GetS3Credentials() (S3Credentials, error) {
+	if a.persist == nil {
+		return S3Credentials{Region: "us-east-1"}, nil
+	}
+	raw, err := a.persist.getSetting(s3CredentialsKey)
+	if err != nil || raw == "" {
+		return S3Credentials{Region: "us-east-1"}, nil
+	}
+	var c S3Credentials
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return S3Credentials{Region: "us-east-1"}, nil
+	}
+	return c, nil
+}
+
+func (a *App) SaveS3Credentials(creds S3Credentials) error {
+	if a.persist == nil {
+		return nil
+	}
+	raw, err := json.Marshal(creds)
+	if err != nil {
+		return err
+	}
+	return a.persist.saveSetting(s3CredentialsKey, string(raw))
 }
 
 const appVersion = "v0.0.0-alpha.7"
@@ -929,6 +1147,9 @@ func (a *App) ImportFromPath(filePath, tableName string) error {
 // The file extension is inferred from the URL path; Content-Type is used as a
 // fallback. This avoids the DuckDB httpfs extension entirely for plain HTTP URLs.
 func (a *App) ImportFromUrl(rawURL, tableName string) error {
+	if strings.HasPrefix(rawURL, "s3://") {
+		return a.importFromS3(rawURL, tableName)
+	}
 	req, err := http.NewRequestWithContext(a.ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return fmt.Errorf("building request: %w", err)
@@ -995,6 +1216,65 @@ func (a *App) ImportFromUrl(rawURL, tableName string) error {
 			safeTable, escapeSingleQuote(tmpPath),
 		))
 	}
+	return err
+}
+
+// importFromS3 imports a file from an S3-compatible store using DuckDB's httpfs extension.
+func (a *App) importFromS3(rawURL, tableName string) error {
+	creds, err := a.GetS3Credentials()
+	if err != nil {
+		return fmt.Errorf("loading S3 credentials: %w", err)
+	}
+
+	// Install and load httpfs (idempotent).
+	if _, err := a.duck.ExecContext(a.ctx, `INSTALL httpfs; LOAD httpfs`); err != nil {
+		return fmt.Errorf("loading httpfs extension: %w", err)
+	}
+
+	// Build the CREATE SECRET statement.
+	var secretParts []string
+	secretParts = append(secretParts, "TYPE S3")
+	if creds.Key != "" {
+		secretParts = append(secretParts,
+			fmt.Sprintf("KEY_ID '%s'", escapeSingleQuote(creds.Key)),
+			fmt.Sprintf("SECRET '%s'", escapeSingleQuote(creds.Secret)),
+		)
+	}
+	region := creds.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	secretParts = append(secretParts, fmt.Sprintf("REGION '%s'", escapeSingleQuote(region)))
+	if creds.Endpoint != "" {
+		secretParts = append(secretParts, fmt.Sprintf("ENDPOINT '%s'", escapeSingleQuote(creds.Endpoint)))
+		secretParts = append(secretParts, "URL_STYLE 'path'")
+	}
+	secretSQL := fmt.Sprintf("CREATE OR REPLACE SECRET sqg_s3 (%s)", strings.Join(secretParts, ", "))
+	if _, err := a.duck.ExecContext(a.ctx, secretSQL); err != nil {
+		return fmt.Errorf("configuring S3 secret: %w", err)
+	}
+
+	// Determine file type from the s3:// path.
+	urlPath := rawURL
+	if i := strings.IndexAny(rawURL, "?#"); i >= 0 {
+		urlPath = rawURL[:i]
+	}
+	ext := strings.ToLower(filepath.Ext(urlPath))
+
+	safeURL := escapeSingleQuote(rawURL)
+	safeTable := escapeDoubleQuote(tableName)
+
+	var readExpr string
+	switch ext {
+	case ".parquet":
+		readExpr = fmt.Sprintf("read_parquet('%s')", safeURL)
+	case ".json", ".jsonl", ".ndjson":
+		readExpr = fmt.Sprintf("read_json_auto('%s')", safeURL)
+	default:
+		readExpr = fmt.Sprintf("read_csv_auto('%s')", safeURL)
+	}
+
+	_, err = a.duck.ExecContext(a.ctx, fmt.Sprintf(`CREATE TABLE "%s" AS SELECT * FROM %s`, safeTable, readExpr))
 	return err
 }
 

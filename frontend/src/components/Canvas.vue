@@ -6,8 +6,9 @@ import QueryCard from './QueryCard.vue'
 import ChartCard from './ChartCard.vue'
 import MarkdownCard from './MarkdownCard.vue'
 import SectionCard from './SectionCard.vue'
+import DataCard from './DataCard.vue'
 import { useSchemaStore } from '../stores/schema'
-import type { CanvasNode, SectionNode } from '../stores/schema'
+import type { CanvasNode, SectionNode, DataNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
 import { usePrefs } from '../composables/usePrefs'
@@ -79,7 +80,8 @@ function getNodeCanvasBounds(node: CanvasNode): { x: number; y: number; w: numbe
   }
   switch (node.kind) {
     case 'table':    return { x: node.x, y: node.y, w: node.w ?? 240, h: node.h ?? Math.max(60, 34 + node.columns.length * 28 + 8) }
-    case 'query':    return { x: node.x, y: node.y, w: node.w ?? 280, h: (node.h ?? 84) + 130 }
+    case 'data':     return { x: node.x, y: node.y, w: node.w ?? 220, h: node.h ?? Math.max(60, 34 + node.columns.length * 28 + 34) }
+    case 'query':    return { x: node.x, y: node.y, w: node.w ?? 360, h: (node.h ?? 84) + 130 }
     case 'chart':    return { x: node.x, y: node.y, w: node.w ?? 340, h: (node.h ?? 180) + 200 }
     case 'markdown': return { x: node.x, y: node.y, w: node.w ?? 300, h: (node.h ?? 200) + 34 }
   }
@@ -153,7 +155,7 @@ function zoomOut() {
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 1) return
   const target = e.target as HTMLElement
-  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card') || target.closest('.section-card')) return
+  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card') || target.closest('.section-card') || target.closest('.data-card')) return
   e.preventDefault()
 
   // Middle-click or Space+left-click → pan
@@ -404,6 +406,13 @@ onUnmounted(() => {
         <MarkdownCard
           v-else-if="node.kind === 'markdown'"
           :node="node"
+          :selected="selectedIds.has(node.id)"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <DataCard
+          v-else-if="node.kind === 'data'"
+          :node="(node as DataNode)"
           :selected="selectedIds.has(node.id)"
           @drag-start="onCardDragStart"
           @resize-start="onCardResizeStart"

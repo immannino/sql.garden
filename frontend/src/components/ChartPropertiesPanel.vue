@@ -79,8 +79,8 @@ const isTableType    = computed(() => node.value?.chartType === 'table')
 
 const chartHelp = computed(() => node.value ? CHART_HELP[node.value.chartType] ?? null : null)
 
-// ── Available query nodes for source selector ─────────────────────────────────
-const queryNodes = computed(() => schemaStore.nodes.filter((n) => n.kind === 'query'))
+// ── Available source nodes (query + data) for source selector ─────────────────
+const queryNodes = computed(() => schemaStore.nodes.filter((n) => n.kind === 'query' || n.kind === 'data'))
 
 // ── Effective data (for column list) ─────────────────────────────────────────
 const effectiveData = computed(() => {
@@ -127,15 +127,33 @@ async function runInline() {
   }
 }
 
-// ── Refresh linked query node ─────────────────────────────────────────────────
+// ── Refresh linked node (query or data) ──────────────────────────────────────
 async function runLinked() {
   if (!node.value?.sourceId || isRunning.value) return
-  const sourceNode = schemaStore.nodes.find((n) => n.id === node.value!.sourceId && n.kind === 'query')
-  if (!sourceNode || sourceNode.kind !== 'query') return
-  const sql = sourceNode.sql.trim()
-  if (!sql) return
+  const sourceNode = schemaStore.nodes.find((n) => n.id === node.value!.sourceId)
+  if (!sourceNode) return
   isRunning.value = true
   runError.value = null
+
+  if (sourceNode.kind === 'data') {
+    const safe = sourceNode.name.replace(/"/g, '""')
+    setResult(sourceNode.id, { columns: [], rows: [], error: null, isRunning: true })
+    try {
+      const result = await query(`SELECT * FROM "${safe}"`)
+      setResult(sourceNode.id, { columns: result.columns, rows: result.rows, error: null, isRunning: false })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      runError.value = msg
+      setResult(sourceNode.id, { columns: [], rows: [], error: msg, isRunning: false })
+    } finally {
+      isRunning.value = false
+    }
+    return
+  }
+
+  if (sourceNode.kind !== 'query') { isRunning.value = false; return }
+  const sql = sourceNode.sql.trim()
+  if (!sql) { isRunning.value = false; return }
   setResult(sourceNode.id, { columns: [], rows: [], error: null, isRunning: true })
   try {
     const result = await query(sql)
@@ -325,8 +343,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               :class="{ active: !!node.sourceId }"
               @click="queryNodes[0] && setSource(queryNodes[0].id)"
               :disabled="queryNodes.length === 0"
-              :title="queryNodes.length === 0 ? 'Add a Query node first' : undefined"
-            >Query node</button>
+              :title="queryNodes.length === 0 ? 'Add a Query or Data node first' : undefined"
+            >Linked node</button>
           </div>
 
           <!-- Inline SQL mode -->
@@ -357,7 +375,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
               :value="node.sourceId"
               @change="setSource(($event.target as HTMLSelectElement).value)"
             >
-              <option v-for="qn in queryNodes" :key="qn.id" :value="qn.id">{{ qn.name }}</option>
+              <option v-for="qn in queryNodes" :key="qn.id" :value="qn.id">{{ qn.name }}{{ qn.kind === 'data' ? ' (table)' : '' }}</option>
             </select>
             <button
               class="run-btn"

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- DuckDB uses LLVM JIT for query compilation — required with Hardened Runtime -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <!-- Go runtime and DuckDB JIT need writable+executable memory pages -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Outbound: S3 connections, update checks, CORS proxy -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Local MCP server listens on a loopback TCP port -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- File open/save dialogs: importing data files, exporting node bundles -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>
