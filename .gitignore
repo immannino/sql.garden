@@ -26,3 +26,8 @@ sql.garden
 build/bin
 
 certs
+.env
+*.p12
+*.key
+build/bin/
+node_modules/
