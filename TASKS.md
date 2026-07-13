@@ -212,6 +212,11 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Web (WASM) parity
 - [ ] **Canvas persistence on web** — State resets on page reload; could use IndexedDB or localStorage.
 
+### Website & Distribution
+- [ ] **`immannino/sql.garden-www`** — New repo. Astro + Starlight: marketing homepage at `/`, docs at `/docs`. Deploy to GitHub Pages with custom domain `sql.garden`. DNSSimple: apex A records → GitHub Pages IPs. Content needed: hero + demo GIF, feature highlights, download CTA, Getting Started, node types, MCP setup, S3 setup, keyboard shortcuts.
+- [ ] **Sandbox deployment** — Add CI job to existing `sql.garden` repo: build Vite frontend (Wasm mode) → push to `gh-pages` branch. GitHub Pages custom domain `sandbox.sql.garden`. DNSSimple: CNAME `sandbox` → `immannino.github.io`. Gate/hide desktop-only features (MCP tab, native file dialogs).
+- [ ] **Web / mobile polish** — Canvas unusable on mobile (no touch pan/zoom, no tap-to-select). Minimum bar for Sandbox launch: pinch-to-zoom, two-finger pan, tap to select. Add "best experienced on desktop" banner for mobile viewports as a short-term graceful degradation.
+
 ---
 
 ## 🗑️ Tabled

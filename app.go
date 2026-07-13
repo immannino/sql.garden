@@ -66,6 +66,13 @@ func (a *App) startup(ctx context.Context) {
 		a.persist = pdb
 	}
 
+	// Seed AWS env vars from stored credentials so DuckDB's httpfs extension
+	// finds the correct region when the app is launched from Finder/Dock (no
+	// shell profile runs in that case, so env vars from ~/.zshrc are absent).
+	if creds, err := a.GetS3Credentials(); err == nil && creds.Region != "" {
+		os.Setenv("AWS_DEFAULT_REGION", creds.Region) //nolint:errcheck
+	}
+
 	go a.startMCPServer()
 
 	runtime.MenuSetApplicationMenu(ctx, a.buildMenu())
@@ -1239,6 +1246,8 @@ func (a *App) importFromS3(rawURL, tableName string) error {
 			fmt.Sprintf("KEY_ID '%s'", escapeSingleQuote(creds.Key)),
 			fmt.Sprintf("SECRET '%s'", escapeSingleQuote(creds.Secret)),
 		)
+	} else {
+		secretParts = append(secretParts, "PROVIDER credential_chain")
 	}
 	region := creds.Region
 	if region == "" {
