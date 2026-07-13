@@ -122,7 +122,7 @@
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
 - [x] macOS .app zipped before artifact upload (preserves bundle structure)
-- [x] **Code signing & notarization workflow** — `build/darwin/entitlements.plist` created (allow-jit, network.client/server, files.user-selected.read-write); bundle ID set to `garden.sql`; release.yml updated with keychain import → `codesign --options runtime` → `ditto` packaging → `notarytool submit --wait` → `stapler staple` → re-package. All steps guarded by secret presence so unsigned builds still work. Notarize step captures Apple rejection log on failure via `notarytool log`. **Blocked on Apple Developer account activation.**
+- [x] **Code signing & notarization workflow** — `build/darwin/entitlements.plist` created (allow-jit, network.client/server, files.user-selected.read-write); bundle ID set to `garden.sql`; release.yml updated with keychain import → `codesign --options runtime` → `ditto` packaging → `notarytool submit --wait` → `stapler staple` → re-package. All steps guarded by secret presence so unsigned builds still work. Notarize step captures Apple rejection log on failure via `notarytool log`. First successful notarization confirmed.
 
 ---
 
@@ -205,7 +205,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [ ] **SSH tunnel support** — Config for connecting to remote DBs via SSH port-forward.
 
 ### Desktop-specific
-- [ ] **Code signing & notarization** — Workflow fully implemented; waiting on Apple Developer account activation to add secrets and test end-to-end. See CI / Release in Done section for details.
+- [x] **Code signing & notarization** — Apple Developer account activated, secrets added to GitHub Actions, first notarization succeeded end-to-end. Signed + stapled builds ship on every `v*` tag push.
 - [ ] **Auto-update download + relaunch** — Banner appears when update is available but only links to GitHub releases. Wire a native download-and-relaunch flow.
 - [ ] **Windows smoke test** — CI builds the Windows binary but no manual QA done.
 
