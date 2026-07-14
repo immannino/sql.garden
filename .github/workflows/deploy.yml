@@ -1,9 +1,8 @@
-# Builds the landing page (Astro) + web playground (Vite/DuckDB Wasm)
+# Builds the VitePress docs site + web playground (Vite/DuckDB Wasm)
 # and deploys them together to GitHub Pages.
 #
-#   /          → landing page  (website/)
+#   /          → VitePress docs  (docs/)
 #   /sandbox/  → Wasm playground (frontend/)
-#   /docs/     → VitePress docs (future)
 #
 # Prerequisites (one-time repo setup):
 #   Settings → Pages → Source → GitHub Actions
@@ -45,19 +44,6 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # ── Landing page ──────────────────────────────────────────
-      - name: Install website deps
-        working-directory: website
-        run: npm install
-        env:
-          ASTRO_TELEMETRY_DISABLED: '1'
-
-      - name: Build landing page
-        working-directory: website
-        run: npm run build
-        env:
-          ASTRO_TELEMETRY_DISABLED: '1'
-
       # ── Wasm playground ───────────────────────────────────────
       - name: Install frontend deps
         working-directory: frontend
@@ -67,7 +53,7 @@ jobs:
         working-directory: frontend
         run: npm run build:web
 
-      # ── Docs ─────────────────────────────────────────────────
+      # ── Docs (serves from /) ──────────────────────────────────
       - name: Install docs deps
         working-directory: docs
         run: npm install
@@ -77,16 +63,13 @@ jobs:
         run: npm run build
 
       # ── Combine into one artifact ─────────────────────────────
-      # website/dist               → root      (sql.garden/)
-      # frontend/dist-web          → /sandbox/ (sql.garden/sandbox/)
-      # docs/.vitepress/dist       → /docs/    (sql.garden/docs/)
+      # docs/.vitepress/dist   → root      (sql.garden/)
+      # frontend/dist-web      → /sandbox/ (sql.garden/sandbox/)
       - name: Assemble Pages artifact
         run: |
           mkdir -p dist-pages/sandbox
-          mkdir -p dist-pages/docs
-          cp -r website/dist/. dist-pages/
+          cp -r docs/.vitepress/dist/. dist-pages/
           cp -r frontend/dist-web/. dist-pages/sandbox/
-          cp -r docs/.vitepress/dist/. dist-pages/docs/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4

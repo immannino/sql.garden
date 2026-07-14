@@ -17,7 +17,10 @@ hero:
       link: https://sql.garden/sandbox
 
 features:
-  - icon: 🦆
+  - icon:
+      src: /duckdb-logo.svg
+      width: 32
+      height: 32
     title: Local DuckDB
     details: DuckDB runs in-process — no servers, no cloud, no latency. Query Parquet, CSV, JSON, and live databases at native speed.
   - icon: 🌱

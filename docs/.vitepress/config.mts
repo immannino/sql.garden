@@ -3,25 +3,21 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'sql.garden',
   description: 'An infinite canvas for your data',
-  base: '/docs/',
+  base: '/',
   outDir: './.vitepress/dist',
 
   head: [
     ['link', { rel: 'icon', href: 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>' }],
-    ['script', { 'data-goatcounter': 'https://sqlgarden.goatcounter.com/count', src: '//gc.zgo.at/count.js'}]
   ],
 
   themeConfig: {
-    logo: { src: '/seedling.png', width: 24, height: 24 },
+    logo: { src: '/logo.svg', width: 24, height: 24 },
     siteTitle: 'sql.garden',
 
     nav: [
-      { text: 'Home', link: 'https://sql.garden' },
+      { text: 'Documentation', link: '/guide/introduction.md' },
       { text: 'Sandbox', link: 'https://sql.garden/sandbox' },
-      {
-        text: 'Download',
-        link: 'https://github.com/immannino/sql.garden/releases/latest',
-      },
+      { text: 'Download', link: 'https://github.com/immannino/sql.garden/releases/latest' },
     ],
 
     sidebar: [
