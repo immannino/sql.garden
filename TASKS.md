@@ -119,6 +119,12 @@
 ### Canvas Operations
 - [x] **Node export / import (.sql.garden.json)** — right-click any node (or multi-select) → "Export node…" triggers native save dialog (desktop) or blob download (web). Data/table nodes embed full row data as `_rows`. Import via canvas right-click, file picker, or drag-drop a `.sql.garden.json` onto the window. Import centers bundle on current viewport, remaps IDs/names to avoid conflicts, processes charts last so `sourceId` refs resolve correctly. Entire import is a single undo snapshot.
 
+### Open Source
+- [x] **GPL v3 license** — `LICENSE` file with full GPL v3 text; copyright `2024-2026 Tony Mannino <goodbarnhello@gmail.com>`
+- [x] **Security policy** — `SECURITY.md` with private disclosure email and 72hr response / 14-day fix SLA
+- [ ] **CONTRIBUTING.md** — How to file issues, branch/PR conventions, running the app locally, test requirements (MCP integration tests must pass)
+- [ ] **Code of Conduct** — Contributor Covenant or similar; links from CONTRIBUTING.md
+
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
 - [x] macOS .app zipped before artifact upload (preserves bundle structure)

@@ -1,0 +1,752 @@
+---
+const title = 'sql.garden — An infinite canvas for your data'
+const desc  = 'Query, explore, and visualize with DuckDB. Wire up AI agents via MCP. All local, all fast.'
+const ghUrl = 'https://github.com/immannino/sql.garden'
+const releaseUrl = 'https://github.com/immannino/sql.garden/releases/latest'
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <meta name="description" content={desc} />
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={desc} />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://sql.garden" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌱</text></svg>"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<!-- ── Nav ──────────────────────────────────────────────────── -->
+<header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">
+      🌱 sql.garden
+    </a>
+    <nav class="nav-links">
+      <a href="/docs">Docs</a>
+      <a href="/sandbox">Sandbox</a>
+      <a href={ghUrl} target="_blank" rel="noopener">GitHub</a>
+    </nav>
+    <a href={releaseUrl} class="nav-cta" target="_blank" rel="noopener">Download</a>
+  </div>
+</header>
+
+<!-- ── Hero ─────────────────────────────────────────────────── -->
+<section class="hero dot-grid">
+  <div class="hero-inner">
+    <div class="hero-text">
+      <div class="hero-badge">Open source · GPL v3 · Local-first</div>
+      <h1>An infinite canvas<br/>for your data</h1>
+      <p class="hero-sub">
+        Query, visualize, and explore with DuckDB running in-process.
+        Wire up AI agents via MCP. Your data never leaves your machine.
+      </p>
+      <div class="hero-actions">
+        <a href={releaseUrl} class="btn-primary" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 1v9M4 7l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Download for macOS
+        </a>
+        <a href={releaseUrl} class="btn-secondary" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 1v9M4 7l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Download for Windows
+        </a>
+        <a href="/sandbox" class="btn-ghost">Try in browser →</a>
+      </div>
+    </div>
+
+    <!-- Mock canvas preview (desktop) -->
+    <div class="hero-canvas" aria-hidden="true">
+      <div class="canvas-bg dot-grid">
+        <!-- QueryNode mock -->
+        <div class="mock-node mock-query" style="top: 24px; left: 16px;">
+          <div class="mock-node-header">
+            <span class="mock-node-dot" style="background:#18b569"></span>
+            monthly_revenue
+          </div>
+          <div class="mock-node-body">
+            <div class="mock-code">
+              <span class="kw">SELECT</span> month,<br/>
+              &nbsp;&nbsp;<span class="kw">SUM</span>(amount) <span class="kw">AS</span> revenue<br/>
+              <span class="kw">FROM</span> orders<br/>
+              <span class="kw">GROUP BY</span> month
+            </div>
+            <div class="mock-node-footer">
+              <span class="mock-badge">12 rows</span>
+              <span class="mock-run">▶ Run</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- DataNode mock -->
+        <div class="mock-node mock-data" style="top: 28px; right: 12px;">
+          <div class="mock-node-header">
+            <svg viewBox="0 0 14 14" fill="none" width="12" height="12">
+              <ellipse cx="7" cy="3.5" rx="4.5" ry="1.5" stroke="currentColor" stroke-width="1.1"/>
+              <path d="M2.5 3.5v7c0 .83 2.01 1.5 4.5 1.5s4.5-.67 4.5-1.5v-7" stroke="currentColor" stroke-width="1.1"/>
+              <path d="M2.5 7c0 .83 2.01 1.5 4.5 1.5S11.5 7.83 11.5 7" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+            </svg>
+            orders
+          </div>
+          <div class="mock-node-body mock-cols">
+            <div class="mock-col"><span class="mock-type">i32</span> order_id</div>
+            <div class="mock-col"><span class="mock-type">str</span> customer</div>
+            <div class="mock-col"><span class="mock-type">f64</span> amount</div>
+            <div class="mock-col"><span class="mock-type">ts</span>&nbsp; created_at</div>
+          </div>
+          <div class="mock-node-footer">
+            <span class="mock-badge">48,291 rows</span>
+          </div>
+        </div>
+
+        <!-- ChartNode mock -->
+        <div class="mock-node mock-chart" style="bottom: 20px; left: 50%; transform: translateX(-50%);">
+          <div class="mock-node-header">
+            <span class="mock-node-dot" style="background:#3fb950"></span>
+            Revenue by Month
+          </div>
+          <div class="mock-bars">
+            <div class="mock-bar" style="height:32px"></div>
+            <div class="mock-bar" style="height:48px"></div>
+            <div class="mock-bar" style="height:38px"></div>
+            <div class="mock-bar" style="height:56px"></div>
+            <div class="mock-bar" style="height:44px"></div>
+            <div class="mock-bar" style="height:64px"></div>
+            <div class="mock-bar" style="height:52px"></div>
+          </div>
+        </div>
+
+        <!-- Connection line SVG -->
+        <svg class="mock-connector" viewBox="0 0 340 260" fill="none">
+          <path d="M 155 72 Q 210 72 210 48" stroke="#18b569" stroke-width="1" stroke-dasharray="4 3" opacity=".4"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Features ──────────────────────────────────────────────── -->
+<section class="features">
+  <div class="section-inner">
+    <h2 class="section-title">Everything you need to explore data</h2>
+    <div class="feature-grid">
+
+      <div class="feature-card">
+        <div class="feature-icon" style="color:#18b569">
+          <svg viewBox="0 0 20 20" fill="none">
+            <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M7 10h6M7 7h3M7 13h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Local DuckDB</h3>
+        <p>DuckDB runs in-process inside the app. No servers, no cloud, no latency. Query parquet, CSV, JSON, and live databases at native speed. Your data never leaves your machine.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon" style="color:#3fb950">
+          <svg viewBox="0 0 20 20" fill="none">
+            <circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M3 10h14M10 3c-2 3-2 11 0 14M10 3c2 3 2 11 0 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Infinite Canvas</h3>
+        <p>Place query nodes, charts, tables, and notes anywhere on an infinite canvas. Pan, zoom, align, and group nodes into sections. Build dashboards that match how you think.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon" style="color:#d29922">
+          <svg viewBox="0 0 20 20" fill="none">
+            <rect x="2" y="6" width="16" height="8" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M5 10h2M9 10h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="5" cy="3.5" r="1" fill="currentColor" opacity=".5"/>
+            <circle cx="10" cy="3.5" r="1" fill="currentColor" opacity=".5"/>
+            <circle cx="15" cy="3.5" r="1" fill="currentColor" opacity=".5"/>
+          </svg>
+        </div>
+        <h3>MCP / AI Integration</h3>
+        <p>sql.garden runs a local MCP server on port 37421. Connect Claude Code, Claude Desktop, Cursor, or Windsurf. Let agents query your data, add nodes, and build dashboards autonomously.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon" style="color:#e06c75">
+          <svg viewBox="0 0 20 20" fill="none">
+            <ellipse cx="10" cy="5" rx="6" ry="2" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M4 5v10c0 1.1 2.69 2 6 2s6-.9 6-2V5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M4 10c0 1.1 2.69 2 6 2s6-.9 6-2" stroke="currentColor" stroke-width="1.4" opacity=".5"/>
+          </svg>
+        </div>
+        <h3>S3 & Connections</h3>
+        <p>Connect to Postgres, SQLite, MySQL, and DuckDB files. Import from S3, R2, and MinIO. Browse buckets, click a file, and it opens as a query node. Parquet, CSV, JSON — whatever DuckDB speaks.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── MCP callout ────────────────────────────────────────────── -->
+<section class="mcp-section dot-grid">
+  <div class="section-inner mcp-inner">
+    <div class="mcp-text">
+      <div class="hero-badge">Model Context Protocol</div>
+      <h2>Your AI agent can use your data</h2>
+      <p>sql.garden exposes a full MCP server so AI assistants can query tables, add canvas nodes, build charts, and import datasets — all without leaving your chat.</p>
+      <div class="mcp-steps">
+        <div class="mcp-step">
+          <span class="mcp-step-num">1</span>
+          Open sql.garden → Settings → MCP
+        </div>
+        <div class="mcp-step">
+          <span class="mcp-step-num">2</span>
+          Copy your config snippet or click Auto-configure
+        </div>
+        <div class="mcp-step">
+          <span class="mcp-step-num">3</span>
+          Ask Claude to build a dashboard from your data
+        </div>
+      </div>
+    </div>
+    <div class="mcp-code-block">
+      <div class="mcp-code-header">
+        <span class="mcp-code-title">~/.claude/claude_desktop_config.json</span>
+      </div>
+      <pre class="mcp-code"><span class="kw2">{`{
+  "mcpServers": {
+    "sql-garden": {
+      "url": "http://127.0.0.1:37421/mcp"
+    }
+  }
+}`}</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ── Download CTA ───────────────────────────────────────────── -->
+<section class="download-section">
+  <div class="section-inner download-inner">
+    <h2>Free and open source</h2>
+    <p>sql.garden is GPL v3 licensed. Download the native desktop app or try the browser sandbox.</p>
+    <div class="download-actions">
+      <a href={releaseUrl} class="btn-primary btn-lg" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="none">
+          <path d="M8 1v9M4 7l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Download for macOS
+      </a>
+      <a href={releaseUrl} class="btn-secondary btn-lg" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="none">
+          <path d="M8 1v9M4 7l4 4 4-4M2 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Download for Windows
+      </a>
+      <a href="/sandbox" class="btn-ghost btn-lg">Try in browser →</a>
+    </div>
+    <p class="download-note">macOS requires 13.0+. Windows requires 10+. Linux coming soon.</p>
+  </div>
+</section>
+
+<!-- ── Footer ────────────────────────────────────────────────── -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-logo">
+      <a href="/" class="nav-logo">
+        <img src="/logo.svg" width="24" height="24" alt="" />
+        sql.garden
+      </a>
+      <span class="footer-copy">© 2026 Tony Mannino · GPL v3</span>
+    </div>
+    <div class="footer-links">
+      <a href="/docs">Docs</a>
+      <a href="/sandbox">Sandbox</a>
+      <a href={ghUrl} target="_blank" rel="noopener">GitHub</a>
+      <a href="/security">Security</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
+
+<style is:global>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:           #0c0e14;
+    --surface-0:    #111520;
+    --surface-1:    #181c28;
+    --surface-2:    #1e2330;
+    --border:       #252b3b;
+    --border-subtle:#1d2130;
+    --text-primary: #e2e6f0;
+    --text-secondary:#8b93a8;
+    --text-muted:   #4a5068;
+    --accent:       #18b569;
+    --accent-sub:   rgba(24,181,105,.12);
+    --green:        #3fb950;
+    --amber:        #d29922;
+    --red:          #e06c75;
+    --grid-dot:     rgba(255,255,255,.055);
+    --radius:       8px;
+    --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  /* Dot grid utility */
+  .dot-grid {
+    background-color: var(--bg);
+    background-image: radial-gradient(circle, var(--grid-dot) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+</style>
+
+<style>
+  /* ── Nav ─────────────────────────────────────────────────── */
+  .nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(12,14,20,.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .nav-inner {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+  }
+  .nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -.3px;
+  }
+  .nav-links {
+    display: flex;
+    gap: 24px;
+    margin-left: auto;
+  }
+  .nav-links a {
+    font-size: 14px;
+    color: var(--text-secondary);
+    transition: color .15s;
+  }
+  .nav-links a:hover { color: var(--text-primary); }
+  .nav-cta {
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 16px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 6px;
+    transition: opacity .15s;
+    white-space: nowrap;
+  }
+  .nav-cta:hover { opacity: .88; }
+
+  /* ── Hero ────────────────────────────────────────────────── */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    padding-top: 56px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .hero-inner {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 80px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+    width: 100%;
+  }
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-sub);
+    border: 1px solid rgba(24,181,105,.25);
+    border-radius: 20px;
+    padding: 4px 12px;
+    margin-bottom: 20px;
+    letter-spacing: .3px;
+    text-transform: uppercase;
+  }
+  .hero-text h1 {
+    font-size: clamp(36px, 5vw, 58px);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -.03em;
+    margin-bottom: 20px;
+  }
+  .hero-sub {
+    font-size: 17px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin-bottom: 36px;
+    max-width: 480px;
+  }
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+  }
+
+  /* ── Buttons ─────────────────────────────────────────────── */
+  .btn-primary, .btn-secondary, .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 10px 20px;
+    border-radius: 7px;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .btn-primary svg, .btn-secondary svg { width: 15px; height: 15px; }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { opacity: .88; }
+  .btn-secondary {
+    background: var(--surface-2);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { background: var(--surface-1); border-color: var(--text-muted); }
+  .btn-ghost {
+    color: var(--text-secondary);
+    padding: 10px 4px;
+  }
+  .btn-ghost:hover { color: var(--text-primary); }
+  .btn-lg { font-size: 15px; padding: 12px 24px; }
+
+  /* ── Mock Canvas ─────────────────────────────────────────── */
+  .hero-canvas {
+    position: relative;
+    height: 320px;
+  }
+  .canvas-bg {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+  .mock-node {
+    position: absolute;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 11.5px;
+    color: var(--text-primary);
+    box-shadow: 0 4px 20px rgba(0,0,0,.35);
+    min-width: 148px;
+  }
+  .mock-node-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--surface-2);
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .mock-node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .mock-node-body { padding: 10px; }
+  .mock-code {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .kw { color: var(--accent); }
+  .mock-node-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    font-size: 10.5px;
+  }
+  .mock-badge {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .mock-run {
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 10.5px;
+    cursor: default;
+  }
+  .mock-cols { display: flex; flex-direction: column; gap: 4px; }
+  .mock-col {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10.5px;
+    color: var(--text-secondary);
+  }
+  .mock-type {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    background: var(--surface-0);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 4px;
+    color: var(--text-muted);
+    min-width: 26px;
+    text-align: center;
+  }
+  .mock-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 5px;
+    padding: 12px 12px 8px;
+    height: 80px;
+  }
+  .mock-bar {
+    flex: 1;
+    background: var(--accent);
+    border-radius: 3px 3px 0 0;
+    opacity: .7;
+    min-width: 14px;
+  }
+  .mock-chart { width: 180px; }
+  .mock-connector {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  /* ── Features ────────────────────────────────────────────── */
+  .features { padding: 96px 0; }
+  .section-inner {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+  .section-title {
+    font-size: clamp(24px, 3vw, 34px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin-bottom: 48px;
+    text-align: center;
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+  .feature-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    border-left: 3px solid transparent;
+    transition: border-color .2s, background .2s;
+  }
+  .feature-card:hover { background: var(--surface-2); border-left-color: var(--accent); }
+  .feature-icon {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 16px;
+  }
+  .feature-icon svg { width: 36px; height: 36px; }
+  .feature-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+  }
+  .feature-card p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+
+  /* ── MCP section ─────────────────────────────────────────── */
+  .mcp-section {
+    padding: 96px 0;
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .mcp-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+  }
+  .mcp-text h2 {
+    font-size: clamp(24px, 3vw, 34px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 16px 0 12px;
+  }
+  .mcp-text p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+    margin-bottom: 28px;
+  }
+  .mcp-steps { display: flex; flex-direction: column; gap: 12px; }
+  .mcp-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+  .mcp-step-num {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-sub);
+    border: 1px solid rgba(24,181,105,.3);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .mcp-code-block {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .mcp-code-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .mcp-code-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .mcp-code {
+    padding: 20px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    margin: 0;
+    white-space: pre;
+  }
+  .kw2 { color: var(--text-primary); }
+
+  /* ── Download section ────────────────────────────────────── */
+  .download-section { padding: 96px 0; text-align: center; }
+  .download-inner { display: flex; flex-direction: column; align-items: center; }
+  .download-inner h2 {
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin-bottom: 12px;
+  }
+  .download-inner > p {
+    font-size: 16px;
+    color: var(--text-secondary);
+    margin-bottom: 36px;
+  }
+  .download-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 20px;
+  }
+  .download-note {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* ── Footer ──────────────────────────────────────────────── */
+  .footer {
+    border-top: 1px solid var(--border-subtle);
+    padding: 24px 0;
+  }
+  .footer-inner {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .footer-logo { display: flex; flex-direction: column; gap: 4px; }
+  .footer-copy { font-size: 12px; color: var(--text-muted); padding-left: 32px; }
+  .footer-links {
+    display: flex;
+    gap: 20px;
+  }
+  .footer-links a {
+    font-size: 13px;
+    color: var(--text-muted);
+    transition: color .15s;
+  }
+  .footer-links a:hover { color: var(--text-secondary); }
+
+  /* ── Mobile ──────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .hero-inner {
+      grid-template-columns: 1fr;
+      padding: 60px 24px;
+      gap: 40px;
+    }
+    .hero-canvas { display: none; }
+    .hero-text h1 { font-size: 36px; }
+    .hero-sub { font-size: 16px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .mcp-inner { grid-template-columns: 1fr; gap: 40px; }
+    .nav-links { display: none; }
+    .footer-inner { flex-direction: column; align-items: flex-start; }
+  }
+</style>

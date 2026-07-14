@@ -7,7 +7,7 @@ export default defineConfig({
     // IS_DESKTOP=false eliminates all Go/Wails branches and enables the WASM path.
     __IS_DESKTOP__: 'false',
   },
-  base: '/',  // set to '/sql.garden/' if deploying to GitHub Pages without a custom domain
+  base: '/sandbox/',
   build: {
     outDir: 'dist-web',
     // duckdb-wasm WASM files are large — don't warn about them

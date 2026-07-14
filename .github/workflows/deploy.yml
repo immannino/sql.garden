@@ -1,4 +1,9 @@
-# Builds the web playground and deploys to GitHub Pages.
+# Builds the landing page (Astro) + web playground (Vite/DuckDB Wasm)
+# and deploys them together to GitHub Pages.
+#
+#   /          → landing page  (website/)
+#   /sandbox/  → Wasm playground (frontend/)
+#   /docs/     → VitePress docs (future)
 #
 # Prerequisites (one-time repo setup):
 #   Settings → Pages → Source → GitHub Actions
@@ -8,14 +13,8 @@
 #   COOP/COEP headers in vite.web.config.ts are dev-only. DuckDB Wasm's
 #   selectBundle() auto-detects the missing headers and falls back to the
 #   single-threaded MVP bundle — the playground still works.
-#
-#   To enable the faster multi-threaded bundle on Pages, add coi-serviceworker:
-#     cd frontend && npm i -D coi-serviceworker
-#     cp node_modules/coi-serviceworker/coi-serviceworker.js public/
-#   Then add to index.html <head>:
-#     <script src="/coi-serviceworker.js"></script>
 
-name: Deploy Web Playground
+name: Deploy to GitHub Pages
 
 on:
   push:
@@ -46,7 +45,21 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
+      # ── Landing page ──────────────────────────────────────────
+      - name: Install website deps
+        working-directory: website
+        run: npm install
+        env:
+          ASTRO_TELEMETRY_DISABLED: '1'
+
+      - name: Build landing page
+        working-directory: website
+        run: npm run build
+        env:
+          ASTRO_TELEMETRY_DISABLED: '1'
+
+      # ── Wasm playground ───────────────────────────────────────
+      - name: Install frontend deps
         working-directory: frontend
         run: npm ci
 
@@ -54,10 +67,31 @@ jobs:
         working-directory: frontend
         run: npm run build:web
 
+      # ── Docs ─────────────────────────────────────────────────
+      - name: Install docs deps
+        working-directory: docs
+        run: npm install
+
+      - name: Build docs
+        working-directory: docs
+        run: npm run build
+
+      # ── Combine into one artifact ─────────────────────────────
+      # website/dist               → root      (sql.garden/)
+      # frontend/dist-web          → /sandbox/ (sql.garden/sandbox/)
+      # docs/.vitepress/dist       → /docs/    (sql.garden/docs/)
+      - name: Assemble Pages artifact
+        run: |
+          mkdir -p dist-pages/sandbox
+          mkdir -p dist-pages/docs
+          cp -r website/dist/. dist-pages/
+          cp -r frontend/dist-web/. dist-pages/sandbox/
+          cp -r docs/.vitepress/dist/. dist-pages/docs/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: frontend/dist-web
+          path: dist-pages
 
   deploy:
     name: Deploy
