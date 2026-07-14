@@ -44,6 +44,20 @@ const releaseUrl = 'https://github.com/immannino/sql.garden/releases/latest'
   <div class="hero-inner">
     <div class="hero-text">
       <div class="hero-badge">Open source · GPL v3 · Local-first</div>
+      <div class="hero-badges">
+        <a href="https://github.com/immannino/sql.garden" target="_blank" rel="noopener">
+          <img src="https://img.shields.io/github/stars/immannino/sql.garden?style=flat-square&labelColor=1e2330&color=18b569" alt="GitHub Stars" />
+        </a>
+        <a href="https://github.com/immannino/sql.garden/releases/latest" target="_blank" rel="noopener">
+          <img src="https://img.shields.io/github/v/release/immannino/sql.garden?style=flat-square&labelColor=1e2330&color=18b569" alt="Latest Release" />
+        </a>
+        <a href="https://github.com/immannino/sql.garden/blob/main/LICENSE" target="_blank" rel="noopener">
+          <img src="https://img.shields.io/badge/license-GPL--3.0-18b569?style=flat-square&labelColor=1e2330" alt="License" />
+        </a>
+        <a href="https://github.com/immannino/sql.garden/actions" target="_blank" rel="noopener">
+          <img src="https://img.shields.io/github/actions/workflow/status/immannino/sql.garden/deploy.yml?style=flat-square&labelColor=1e2330&color=18b569" alt="Build Status" />
+        </a>
+      </div>
       <h1>An infinite canvas<br/>for your data</h1>
       <p class="hero-sub">
         Query, visualize, and explore with DuckDB running in-process.
@@ -405,6 +419,14 @@ const releaseUrl = 'https://github.com/immannino/sql.garden/releases/latest'
     letter-spacing: .3px;
     text-transform: uppercase;
   }
+  .hero-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .hero-badges img { display: block; height: 20px; }
+
   .hero-text h1 {
     font-size: clamp(36px, 5vw, 58px);
     font-weight: 700;

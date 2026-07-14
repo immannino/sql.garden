@@ -58,9 +58,30 @@ Add a chart node that visualizes query results.
 |-----------|------|----------|-------------|
 | `name` | string | ✓ | Display label |
 | `source_node` | string | ✓ | Name of the query node to visualize |
-| `chart_type` | string | ✓ | `bar`, `line`, `scatter`, or `pie` |
-| `x_column` | string | ✓ | Column for the X axis (or labels) |
-| `y_column` | string | ✓ | Column for the Y axis (or values) |
+| `chart_type` | string | ✓ | See chart types below |
+| `x_column` | string | | Column for the X axis (or labels for pie/donut) |
+| `y_column` | string | | Column for the Y axis (or values for pie/donut) |
+
+**Chart types:**
+
+| `chart_type` | Label | Columns needed |
+|--------------|-------|----------------|
+| `barY` | Bar Y | X: category or time · Y: numeric |
+| `barX` | Bar X | X: numeric · Y: category |
+| `lineY` | Line | X: time or sequential · Y: numeric |
+| `areaY` | Area | X: time or sequential · Y: numeric |
+| `dot` | Scatter | X: numeric · Y: numeric |
+| `cell` | Cell / Heatmap | X: category · Y: category · Color: numeric |
+| `pie` | Pie | Label: category · Value: numeric |
+| `donut` | Donut | Label: category · Value: numeric |
+| `histogram` | Histogram | X: numeric column to bin |
+| `boxplot` | Box Plot | X: category (group) · Y: numeric |
+| `sankey` | Sankey | Source · Target · Value (flow weight) |
+| `number` | Number | Value: numeric — first row only |
+| `boolean` | Badge | Value: boolean-like — first row only |
+| `conditional` | Status | Value: any · rules evaluated top-to-bottom |
+| `mermaid` | Mermaid | No data columns — write diagram code directly |
+| `table` | Table | All result columns shown by default |
 
 ---
 

@@ -1,3 +1,8 @@
+[![GitHub Stars](https://img.shields.io/github/stars/immannino/sql.garden?style=flat-square&labelColor=0c0e14&color=18b569)](https://github.com/immannino/sql.garden)
+[![Latest Release](https://img.shields.io/github/v/release/immannino/sql.garden?style=flat-square&labelColor=0c0e14&color=18b569)](https://github.com/immannino/sql.garden/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0-18b569?style=flat-square&labelColor=0c0e14&color=18b569)](https://github.com/immannino/sql.garden/blob/main/LICENSE)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/immannino/sql.garden/deploy.yml?style=flat-square&labelColor=0c0e14&color=18b569)](https://github.com/immannino/sql.garden/actions)
+
 # Introduction
 
 sql.garden is a local-first desktop app for querying and exploring data on an infinite canvas. It runs [DuckDB](https://duckdb.org) in-process — no servers, no cloud, no latency.
