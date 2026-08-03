@@ -24,6 +24,7 @@ import { useChartResults } from './composables/useChartResults'
 import { exportData, type ExportFormat } from './lib/exportData'
 import { useSelection } from './composables/useSelection'
 import { IS_DESKTOP } from './lib/env'
+import { usePendingFullscreen } from './composables/usePendingFullscreen'
 import type { main } from '../wailsjs/go/models'
 
 const { init, isReady, isLoading, initError, exec, query, getTableInfo, importTableFromJSON } = useDuckDB()
@@ -36,6 +37,7 @@ const { contextMenu, close: closeContextMenu } = useContextMenu()
 const { openPanel } = useChartPanel()
 const { results: queryResults } = useQueryResults()
 const { chartResults } = useChartResults()
+const { pendingFullscreenId } = usePendingFullscreen()
 const showPalette = ref(false)
 const showSettings = ref(false)
 const settingsInitialTab = ref<'appearance' | 'mcp' | 'updates' | undefined>(undefined)
@@ -147,17 +149,19 @@ async function exportCanvasMarkdown() {
   }
 }
 
-function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
+function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string; openFullscreen?: boolean }) {
   const center = canvasRef.value?.getCenter() ?? { x: 300, y: 300 }
   if (payload.type === 'query') {
     const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
+    const id = `query_${Date.now()}`
     schemaStore.addQueryNode({
-      id: `query_${Date.now()}`,
+      id,
       name: `query_${n}`,
       x: center.x - 140,
       y: center.y - 80,
       sql: payload.sql,
     })
+    if (payload.openFullscreen) pendingFullscreenId.value = id
   } else {
     const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
     schemaStore.addChartNode({
@@ -281,6 +285,7 @@ function contextMenuSections(): MenuSection[] {
   const items: MenuSection[] = []
 
   if (isSection) {
+    items.push({ label: 'Fit to Contents', action: () => fitSectionContents(id) })
     items.push({ label: 'Mosaic Contents', action: () => mosaicSectionContents(id) })
     items.push({ divider: true })
   }
@@ -954,6 +959,36 @@ function wrapInSection() {
   setTimeout(() => canvas.fitView(), 50)
 }
 
+function fitSectionContents(sectionId: string) {
+  const section = schemaStore.nodes.find((n) => n.id === sectionId)
+  if (!section || section.kind !== 'section') return
+
+  const inside = schemaStore.nodes.filter((n) => {
+    if (n.kind === 'section' || n.id === sectionId) return false
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const nw = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const nh = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    const cx = n.x + nw / 2
+    const cy = n.y + nh / 2
+    return cx >= section.x && cx <= section.x + section.w && cy >= section.y && cy <= section.y + section.h
+  })
+  if (!inside.length) return
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const n of inside) {
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const nw = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const nh = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y)
+    maxX = Math.max(maxX, n.x + nw); maxY = Math.max(maxY, n.y + nh)
+  }
+
+  const PAD = 20, TOP_PAD = 52
+  schemaStore.snapshot()
+  schemaStore.updatePositions(new Map([[sectionId, { x: minX - PAD, y: minY - TOP_PAD }]]))
+  schemaStore.updateNodeSize(sectionId, maxX - minX + PAD * 2, maxY - minY + TOP_PAD + PAD)
+}
+
 function mosaicSectionContents(sectionId: string) {
   const canvas = canvasRef.value
   if (!canvas) return
@@ -1418,7 +1453,7 @@ onUnmounted(async () => {
       </nav>
 
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" @create-query="onCreateQueryFromConnection" />
-      <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" />
+      <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" @fit-contents="fitSectionContents" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
 
       <!-- Help button + panel -->

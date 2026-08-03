@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { IS_DESKTOP } from '../lib/env'
 
 const emit = defineEmits<{ close: [], 'open-mcp-settings': [] }>()
@@ -7,8 +7,39 @@ const emit = defineEmits<{ close: [], 'open-mcp-settings': [] }>()
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
-onMounted(() => window.addEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  loadDuckDBVersion()
+})
 onUnmounted(() => window.removeEventListener('keydown', onKey))
+
+// ── DuckDB version + versioned docs link ──────────────────────
+const duckdbVersion = ref<string | null>(null)
+
+// Build a docs URL pinned to the running DuckDB version.
+// DuckDB archive format: https://duckdb.org/docs/archive/1.1/
+// Falls back to stable if we can't parse the version.
+function duckdbDocsUrl(raw: string | null): string {
+  if (!raw) return 'https://duckdb.org/docs/stable/'
+  const m = raw.replace(/^v/, '').match(/^(\d+)\.(\d+)/)
+  if (!m) return 'https://duckdb.org/docs/stable/'
+  return `https://duckdb.org/docs/archive/${m[1]}.${m[2]}/`
+}
+
+async function loadDuckDBVersion() {
+  try {
+    if (IS_DESKTOP) {
+      const { GetDuckDBVersion } = await import('../../wailsjs/go/main/App')
+      duckdbVersion.value = await GetDuckDBVersion()
+    } else {
+      // Web/Wasm: query DuckDB directly via the schema store's db instance
+      // Fall back to stable docs if unavailable
+      duckdbVersion.value = null
+    }
+  } catch {
+    duckdbVersion.value = null
+  }
+}
 
 const SHORTCUT_SECTIONS = [
   {
@@ -44,9 +75,8 @@ const SHORTCUT_SECTIONS = [
   },
 ]
 
-const LINKS = [
+const STATIC_LINKS = [
   { label: 'GitHub', href: 'https://github.com/immannino/sql.garden' },
-  { label: 'Documentation', href: 'https://sql.garden/' },
   { label: 'Report Issue', href: 'https://github.com/immannino/sql.garden/issues' },
 ]
 
@@ -98,7 +128,7 @@ function openLink(href: string) {
         <div class="section-title">Links</div>
         <div class="link-list">
           <button
-            v-for="link in LINKS"
+            v-for="link in STATIC_LINKS"
             :key="link.label"
             class="link-btn"
             @click="openLink(link.href)"
@@ -108,6 +138,14 @@ function openLink(href: string) {
               <path d="M8 1h3v3M11 1L6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             {{ link.label }}
+          </button>
+          <button class="link-btn" @click="openLink(duckdbDocsUrl(duckdbVersion))">
+            <svg viewBox="0 0 12 12" fill="none">
+              <path d="M5 2H2a1 1 0 00-1 1v7a1 1 0 001 1h7a1 1 0 001-1V7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              <path d="M8 1h3v3M11 1L6 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            DuckDB Docs
+            <span v-if="duckdbVersion" class="version-badge">{{ duckdbVersion }}</span>
           </button>
         </div>
       </div>
@@ -257,6 +295,18 @@ function openLink(href: string) {
 .link-btn:hover { background: var(--surface-2); color: var(--text-primary); }
 .link-btn svg { width: 12px; height: 12px; flex-shrink: 0; color: var(--text-muted); }
 .link-btn:hover svg { color: var(--accent); }
+
+.version-badge {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.4;
+}
 
 .mcp-section { margin-bottom: 4px; }
 

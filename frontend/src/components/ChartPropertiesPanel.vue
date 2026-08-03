@@ -39,11 +39,14 @@ const CHART_TYPES = [
   { value: 'histogram',   label: 'Histogram', icon: '▆' },
   { value: 'boxplot',     label: 'Box Plot',  icon: '⊟' },
   { value: 'sankey',      label: 'Sankey',    icon: '↔' },
-  { value: 'number',      label: 'Number',    icon: '#' },
-  { value: 'boolean',     label: 'Badge',     icon: '◉' },
-  { value: 'conditional', label: 'Status',    icon: '◈' },
-  { value: 'mermaid',     label: 'Mermaid',   icon: '⬡' },
-  { value: 'table',       label: 'Table',     icon: '⊞' },
+  { value: 'waterfall',      label: 'Waterfall', icon: '↕' },
+  { value: 'heatmap',        label: 'Heatmap',   icon: '▩' },
+  { value: 'scatter-matrix', label: 'Matrix',    icon: '⊡' },
+  { value: 'number',         label: 'Number',    icon: '#' },
+  { value: 'boolean',        label: 'Badge',     icon: '◉' },
+  { value: 'conditional',    label: 'Status',    icon: '◈' },
+  { value: 'mermaid',        label: 'Mermaid',   icon: '⬡' },
+  { value: 'table',          label: 'Table',     icon: '⊞' },
 ] as const
 
 type ChartTypeValue = typeof CHART_TYPES[number]['value']
@@ -60,22 +63,26 @@ const CHART_HELP: Record<string, { when: string; columns: string; tip?: string }
   histogram:   { when: 'Distribution of a single numeric column — bins are automatic', columns: 'X: numeric column to bin', tip: 'Add a Color column to overlay multiple groups' },
   boxplot:     { when: 'Median, IQR, and outliers — compare distributions across groups', columns: 'X: category (group by) · Y: numeric values', tip: 'Leave X empty for a single overall box' },
   sankey:      { when: 'Flow volume between two sets of categories (funnels, networks)', columns: 'Source: origin category · Target: destination · Value: numeric flow weight', tip: 'Each row is one source → target link with its weight' },
-  number:      { when: 'Display a single key metric as a large number', columns: 'Value: numeric column — uses the first row only', tip: 'Add a Label for a caption below the number' },
+  waterfall:        { when: 'Running totals — show how a value builds up or breaks down', columns: 'X: category · Y: numeric delta (positive = up, negative = down)' },
+  heatmap:          { when: '2D density — color-encode count of data points in X × Y bins', columns: 'X: numeric · Y: numeric', tip: 'Works best with large datasets (1k+ rows)' },
+  'scatter-matrix': { when: 'Pairwise scatter plots for all selected numeric columns', columns: 'Select 2+ numeric columns in the Matrix Columns picker below', tip: 'Best with 2–5 columns' },
+  number:           { when: 'Display a single key metric as a large number', columns: 'Value: numeric column — uses the first row only', tip: 'Add a Label for a caption below the number' },
   boolean:     { when: 'Green/red status badge driven by a boolean or truthy value', columns: 'Value: boolean-like column — uses the first row only' },
   conditional: { when: 'Color-coded badge driven by custom match rules', columns: 'Value: any column · Rules: patterns evaluated top-to-bottom' },
   mermaid:     { when: 'Flowcharts, sequence diagrams, ER diagrams via Mermaid.js', columns: 'No data columns needed — write diagram code directly' },
   table:       { when: 'Formatted data grid with per-column rename, formatting, and alignment', columns: 'All result columns shown by default — configure each individually' },
 }
 
-const isPlotType     = computed(() => node.value && !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey'].includes(node.value.chartType))
-const isPieType      = computed(() => node.value?.chartType === 'pie' || node.value?.chartType === 'donut')
-const isHistogramType= computed(() => node.value?.chartType === 'histogram')
-const isSankeyType   = computed(() => node.value?.chartType === 'sankey')
-const isStatType     = computed(() => node.value?.chartType === 'number')
-const isBoolType     = computed(() => node.value?.chartType === 'boolean')
-const isCondType     = computed(() => node.value?.chartType === 'conditional')
-const isMermaidType  = computed(() => node.value?.chartType === 'mermaid')
-const isTableType    = computed(() => node.value?.chartType === 'table')
+const isPlotType        = computed(() => node.value && !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey', 'scatter-matrix'].includes(node.value.chartType))
+const isPieType         = computed(() => node.value?.chartType === 'pie' || node.value?.chartType === 'donut')
+const isHistogramType   = computed(() => node.value?.chartType === 'histogram')
+const isSankeyType      = computed(() => node.value?.chartType === 'sankey')
+const isScatterMatrixType = computed(() => node.value?.chartType === 'scatter-matrix')
+const isStatType        = computed(() => node.value?.chartType === 'number')
+const isBoolType        = computed(() => node.value?.chartType === 'boolean')
+const isCondType        = computed(() => node.value?.chartType === 'conditional')
+const isMermaidType     = computed(() => node.value?.chartType === 'mermaid')
+const isTableType       = computed(() => node.value?.chartType === 'table')
 
 const chartHelp = computed(() => node.value ? CHART_HELP[node.value.chartType] ?? null : null)
 
@@ -181,6 +188,11 @@ function setSource(mode: 'inline' | string) {
 function setColumn(field: 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn', val: string) {
   if (!node.value) return
   schemaStore.updateChartConfig(node.value.id, { [field]: val || undefined })
+}
+
+function updateMatrixColumns(cols: string[]) {
+  if (!node.value) return
+  schemaStore.updateChartConfig(node.value.id, { matrixColumns: cols })
 }
 
 function setTextField(field: 'chartLabel' | 'trueText' | 'falseText', val: string) {
@@ -477,6 +489,30 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
             </select>
           </div>
           <div v-if="!availableColumns.length" class="pp-hint">Run a query to see columns</div>
+        </section>
+
+        <!-- ── Scatter-matrix columns ────────────────────────────────────── -->
+        <section v-if="isScatterMatrixType" class="pp-section">
+          <div class="pp-section-label">Matrix columns</div>
+          <template v-if="availableColumns.length">
+            <label
+              v-for="col in availableColumns"
+              :key="col"
+              class="matrix-col-item"
+            >
+              <input
+                type="checkbox"
+                :checked="node.matrixColumns?.includes(col) ?? false"
+                @change="updateMatrixColumns(
+                  (node.matrixColumns ?? []).includes(col)
+                    ? (node.matrixColumns ?? []).filter((c) => c !== col)
+                    : [...(node.matrixColumns ?? []), col]
+                )"
+              />
+              <span>{{ col }}</span>
+            </label>
+          </template>
+          <div v-else class="pp-hint">Run a query to see columns</div>
         </section>
 
         <!-- ── Pie / donut columns ──────────────────────────────────────────── -->
@@ -820,6 +856,22 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   color: var(--text-muted);
   font-style: italic;
   margin-top: 6px;
+}
+
+/* ── Scatter-matrix column list ── */
+.matrix-col-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+.matrix-col-item input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 /* ── Chart type grid ── */

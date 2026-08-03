@@ -123,7 +123,7 @@
 - [x] **GPL v3 license** — `LICENSE` file with full GPL v3 text; copyright `2024-2026 Tony Mannino <goodbarnhello@gmail.com>`
 - [x] **Security policy** — `SECURITY.md` with private disclosure email and 72hr response / 14-day fix SLA
 - [x] **CONTRIBUTING.md** — Bug reports, feature requests, dev setup (Wails dev / web sandbox / docs), branch conventions, Red/Green MCP test requirement, sensitive areas (persistence migrations, Wails bindings, DuckDB single-connection).
-- [ ] **Code of Conduct** — Contributor Covenant or similar; links from CONTRIBUTING.md and docs sidebar.
+- [x] **Code of Conduct** — Contributor Covenant v2.1; enforcement contact goodbarnhello@gmail.com.
 
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
@@ -183,8 +183,8 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Polish / QoL
 - [ ] **Section auto-resize** — Option to auto-expand a Section node to wrap its contained nodes.
 - [ ] **Pinned/auto-run queries** — Option to run a query node automatically on canvas open.
-- [ ] **QueryNode fullscreen editing mode** — Expand a QueryNode into a full-screen overlay (Beekeeper Studio-style) while editing. Overlay shows the SQL editor at full height, results table below, and an ✕ / Esc to return to canvas. Canvas state is preserved underneath. Optional QoL — most useful on smaller screens or for long queries.
-- [ ] **Versioned DuckDB docs links under (?) help icon** — The help icon should link to DuckDB documentation pinned to the exact DuckDB version bundled in the build (e.g. `duckdb.org/docs/1.2.0/...`) rather than floating `/docs/stable`. Requires surfacing the DuckDB version string from Go (`go-duckdb` exposes it) and constructing the URL at runtime. Prevents doc/runtime drift when DuckDB releases a breaking change.
+- [x] **QueryNode fullscreen editing mode** — Expand button in card header (hover-visible). Teleports to `body` as a fixed full-screen overlay: header with node name + Esc hint + ✕, full-height SQL editor, results/history tabs, all footer actions. Esc closes. Canvas state preserved underneath. Registered Esc via `capture: true` so it intercepts before canvas handlers.
+- [x] **Versioned DuckDB docs links under (?) help icon** — `GetDuckDBVersion()` Go method queries `SELECT version()` at runtime. HelpPanel fetches it on mount, shows version badge next to "DuckDB Docs" link, and constructs `duckdb.org/docs/archive/{major}.{minor}/` URL. Falls back to stable docs on web/error.
 
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.

@@ -78,7 +78,7 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'histogram' | 'boxplot' | 'sankey' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'histogram' | 'boxplot' | 'sankey' | 'waterfall' | 'heatmap' | 'scatter-matrix' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
   xColumn: string
   yColumn: string
   colorColumn?: string
@@ -94,6 +94,8 @@ export interface ChartNode {
   conditions?: ConditionRule[]
   // mermaid type
   mermaidCode?: string
+  // scatter-matrix type
+  matrixColumns?: string[]
   // table type
   tableColumnConfigs?: Record<string, TableColumnConfig>
   color: string
@@ -308,7 +310,7 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'query') n.isView = isView
   }
 
-  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions' | 'mermaidCode' | 'tableColumnConfigs'>>) {
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions' | 'mermaidCode' | 'matrixColumns' | 'tableColumnConfigs'>>) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'chart') Object.assign(n, updates)
   }

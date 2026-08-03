@@ -147,7 +147,7 @@ function isNull(val: unknown): boolean {
 // ── Panel resize ──────────────────────────────────────────────────────────────
 const emit = defineEmits<{
   close: []
-  create: [{ type: 'query' | 'chart'; sql: string }]
+  create: [{ type: 'query' | 'chart'; sql: string; openFullscreen?: boolean }]
 }>()
 const panelWidth = ref(420)
 
@@ -261,6 +261,12 @@ defineExpose({ refreshStats })
                   <line x1="5.5" y1="9.5" x2="11" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                 </svg>
                 Query node
+              </button>
+              <button class="create-btn" title="Create a QueryCard and open it in fullscreen" @click="emit('create', { type: 'query', sql: sql, openFullscreen: true })">
+                <svg viewBox="0 0 12 12" fill="none">
+                  <path d="M1 4V1h3M8 1h3v3M11 8v3H8M4 11H1V8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Fullscreen
               </button>
               <button class="create-btn" title="Create a ChartCard on the canvas with this SQL" @click="emit('create', { type: 'chart', sql: sql })">
                 <svg viewBox="0 0 12 12" fill="none">

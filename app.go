@@ -671,6 +671,16 @@ const appVersion = "v0.0.3-alpha"
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
 
+// GetDuckDBVersion returns the DuckDB version string (e.g. "v1.1.3") by
+// querying the runtime, so it always matches the bundled go-duckdb build.
+func (a *App) GetDuckDBVersion() (string, error) {
+	var v string
+	if err := a.duck.QueryRow("SELECT version()").Scan(&v); err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
 // UpdateInfo is the result of CheckForUpdate.
 type UpdateInfo struct {
 	CurrentVersion string `json:"currentVersion"`

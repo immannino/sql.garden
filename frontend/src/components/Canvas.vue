@@ -13,7 +13,7 @@ import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
 import { usePrefs } from '../composables/usePrefs'
 
-const emit = defineEmits<{ mosaicContents: [id: string] }>()
+const emit = defineEmits<{ mosaicContents: [id: string]; fitContents: [id: string] }>()
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
@@ -379,6 +379,7 @@ onUnmounted(() => {
         @drag-start="onCardDragStart"
         @resize-start="onCardResizeStart"
         @mosaic-contents="emit('mosaicContents', $event)"
+        @fit-contents="emit('fitContents', $event)"
       />
       <!-- Other nodes -->
       <template v-for="node in schemaStore.nodes.filter(n => n.kind !== 'section')" :key="node.id">
