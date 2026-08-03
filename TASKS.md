@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.1-alpha
-> Updated: 2026-07-09 (session 9)
+> Updated: 2026-07-14 (session 10)
 
 ---
 
@@ -122,8 +122,8 @@
 ### Open Source
 - [x] **GPL v3 license** — `LICENSE` file with full GPL v3 text; copyright `2024-2026 Tony Mannino <goodbarnhello@gmail.com>`
 - [x] **Security policy** — `SECURITY.md` with private disclosure email and 72hr response / 14-day fix SLA
-- [ ] **CONTRIBUTING.md** — How to file issues, branch/PR conventions, running the app locally, test requirements (MCP integration tests must pass)
-- [ ] **Code of Conduct** — Contributor Covenant or similar; links from CONTRIBUTING.md
+- [x] **CONTRIBUTING.md** — Bug reports, feature requests, dev setup (Wails dev / web sandbox / docs), branch conventions, Red/Green MCP test requirement, sensitive areas (persistence migrations, Wails bindings, DuckDB single-connection).
+- [ ] **Code of Conduct** — Contributor Covenant or similar; links from CONTRIBUTING.md and docs sidebar.
 
 ### CI / Release
 - [x] GitHub Actions: macOS universal build + Windows build on tag push
@@ -183,6 +183,8 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Polish / QoL
 - [ ] **Section auto-resize** — Option to auto-expand a Section node to wrap its contained nodes.
 - [ ] **Pinned/auto-run queries** — Option to run a query node automatically on canvas open.
+- [ ] **QueryNode fullscreen editing mode** — Expand a QueryNode into a full-screen overlay (Beekeeper Studio-style) while editing. Overlay shows the SQL editor at full height, results table below, and an ✕ / Esc to return to canvas. Canvas state is preserved underneath. Optional QoL — most useful on smaller screens or for long queries.
+- [ ] **Versioned DuckDB docs links under (?) help icon** — The help icon should link to DuckDB documentation pinned to the exact DuckDB version bundled in the build (e.g. `duckdb.org/docs/1.2.0/...`) rather than floating `/docs/stable`. Requires surfacing the DuckDB version string from Go (`go-duckdb` exposes it) and constructing the URL at runtime. Prevents doc/runtime drift when DuckDB releases a breaking change.
 
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
@@ -201,7 +203,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Discovery & Content
 - [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.
-- [ ] **Dataset directory** — Hosted JSON index of curated public datasets (FRED, Census, Our World in Data, stock market, healthcare, etc.) with name, source URL, description, tags, and license. In-app "Explore" panel fetches + searches the index; clicking a dataset fires the existing URL import flow. Index starts as a hand-curated JSON file in a GitHub repo — no database needed. Strong differentiator; dataset index is a separate hosted artifact.
+- [ ] **Dataset directory + proxy API** — See full design below.
 - [ ] **Community / Explore page** — Longer-term hub surfacing dataset directory, user-shared canvases, blog posts, and curated data stories. Builds on the dataset directory and news feed foundations.
 
 ### Reporting
@@ -212,16 +214,100 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Desktop-specific
 - [x] **Code signing & notarization** — Apple Developer account activated, secrets added to GitHub Actions, first notarization succeeded end-to-end. Signed + stapled builds ship on every `v*` tag push.
-- [ ] **Auto-update download + relaunch** — Banner appears when update is available but only links to GitHub releases. Wire a native download-and-relaunch flow.
+- [ ] **Auto-update download + relaunch** — Banner exists, links to GitHub releases. Needs: native download-and-relaunch flow. Also needs: GitHub Releases/Tags cleanup (stale pre-release tags cluttering the releases page).
 - [ ] **Windows smoke test** — CI builds the Windows binary but no manual QA done.
 
 ### Web (WASM) parity
 - [ ] **Canvas persistence on web** — State resets on page reload; could use IndexedDB or localStorage.
 
 ### Website & Distribution
-- [ ] **`immannino/sql.garden-www`** — New repo. Astro + Starlight: marketing homepage at `/`, docs at `/docs`. Deploy to GitHub Pages with custom domain `sql.garden`. DNSSimple: apex A records → GitHub Pages IPs. Content needed: hero + demo GIF, feature highlights, download CTA, Getting Started, node types, MCP setup, S3 setup, keyboard shortcuts.
-- [ ] **Sandbox deployment** — Add CI job to existing `sql.garden` repo: build Vite frontend (Wasm mode) → push to `gh-pages` branch. GitHub Pages custom domain `sandbox.sql.garden`. DNSSimple: CNAME `sandbox` → `immannino.github.io`. Gate/hide desktop-only features (MCP tab, native file dialogs).
-- [ ] **Web / mobile polish** — Canvas unusable on mobile (no touch pan/zoom, no tap-to-select). Minimum bar for Sandbox launch: pinch-to-zoom, two-finger pan, tap to select. Add "best experienced on desktop" banner for mobile viewports as a short-term graceful degradation.
+- [x] **VitePress docs site** — Scaffolded at `docs/`, serves from `/` (root). Custom theme: brand green `#18b569`, MockCanvas hero, light/dark theme support. Content: Introduction, Installation, Quick Start, Nodes (all 15 chart types), Connections, Import, MCP overview/config/tools reference. GitHub badges in hero and footer. "OPEN SOURCE · LOCAL-FIRST" pill above footer.
+- [x] **Deprecated `website/` Astro site** — VitePress is now the homepage. `website/` directory deleted. `deploy.yml` simplified: docs → `/`, sandbox → `/sandbox/`.
+- [x] **Sandbox CI deployment** — `frontend/vite.web.config.ts` base set to `/sandbox/`. CI assembles docs + sandbox into single Pages artifact. DuckDB Wasm fallback to single-threaded bundle (no COOP/COEP on Pages).
+- [x] **MockCanvas hero component** — Dot-grid canvas preview, three nodes (Query/Data/Chart), SVG connectors. Light/dark theme reactive. Desktop: right of hero text. Mobile (≤959px): stacked column below CTAs via `home-hero-after` slot.
+- [x] **Custom domain DNS** — DNSSimple apex A records → GitHub Pages IPs for `sql.garden`. GitHub Pages custom domain configured.
+- [ ] **Web / mobile polish** — Sandbox canvas unusable on mobile (no touch pan/zoom, tap-to-select). Minimum: pinch-to-zoom, two-finger pan, tap to select. Short-term: "best on desktop" banner.
+
+---
+
+## 🗗 Dataset Directory — Design
+
+### Goal
+A curated library of public datasets importable in one click from inside sql.garden (desktop + sandbox). Strong differentiator: you open the app, see interesting data, and start querying immediately.
+
+### Architecture
+
+```
+sql.garden app
+  └─ "Explore" sidebar tab
+       └─ fetches index.json from api.sql.garden/datasets
+            └─ Go API (Fly.io / Railway)
+                 ├─ GET /datasets          → paginated + filterable index
+                 ├─ GET /datasets/:slug    → metadata + download URL
+                 └─ GET /proxy/:slug       → streams file from R2/S3 (CORS bypass)
+
+Cloudflare R2 bucket (or AWS S3)
+  └─ /datasets/:slug/:file.parquet   (pre-processed snapshots)
+  └─ index.json                       (auto-regenerated by updater job)
+
+Updater job (Go binary, cron via Fly Machines or GitHub Actions schedule)
+  └─ fetches source URLs (FRED, Census, OurWorldInData, etc.)
+  └─ converts to Parquet via DuckDB
+  └─ uploads to R2
+  └─ rewrites index.json
+```
+
+### Index schema (`index.json`)
+```json
+{
+  "updated_at": "2026-07-14T00:00:00Z",
+  "datasets": [
+    {
+      "slug": "fred-us-gdp",
+      "name": "US GDP (FRED)",
+      "description": "Quarterly US real GDP from the Federal Reserve Economic Data.",
+      "tags": ["economics", "united states", "time series"],
+      "source": "https://fred.stlouisfed.org/series/GDPC1",
+      "license": "Public Domain",
+      "updated_at": "2026-07-01",
+      "rows": 312,
+      "size_bytes": 18400,
+      "file": "fred-us-gdp/data.parquet"
+    }
+  ]
+}
+```
+
+### In-app "Explore" panel (sidebar tab)
+- Search box filters by name/tag/description client-side
+- Tag chips for quick filtering (Economics, Health, Climate, Sports, etc.)
+- Each row: name, row count, license badge, source link, **Import** button
+- Import fires `import_url` using the proxy URL → creates TableNode + auto-runs a QueryNode
+- Sandbox: uses `/proxy/:slug` route (CORS bypass). Desktop: direct R2 URL or proxy.
+
+### Initial dataset wishlist
+| Slug | Source | Update cadence |
+|------|--------|----------------|
+| fred-us-gdp | FRED GDPC1 | Quarterly |
+| fred-cpi | FRED CPIAUCSL | Monthly |
+| ourworldindata-co2 | OWID CO₂ | Annual |
+| census-us-pop | US Census Bureau | Annual |
+| yahoo-sp500-daily | Yahoo Finance | Daily |
+| github-top-repos | GH Archive | Weekly |
+| openaq-air-quality | OpenAQ API | Daily |
+| imdb-top-movies | IMDb datasets | Weekly |
+
+### Go API tasks
+- [ ] **Repo** — New `sql.garden-api` repo (or `api/` subdirectory). Go + `net/http` + R2 SDK.
+- [ ] **`GET /datasets`** — Reads `index.json` from R2, returns filtered/paginated JSON. Query params: `q`, `tag`, `page`, `limit`.
+- [ ] **`GET /proxy/:slug`** — Streams R2 object to client with `Content-Type: application/octet-stream` + CORS headers. Replaces Cloudflare Worker plan.
+- [ ] **Updater job** — Fetches sources, converts to Parquet via `go-duckdb`, uploads to R2, regenerates `index.json`. Cron via Fly Machines scheduler or GitHub Actions `schedule:`.
+- [ ] **Deploy** — Fly.io (free tier, single small machine). `fly.toml` with health check on `/health`.
+
+### In-app tasks
+- [ ] **Explore sidebar tab** — New tab in `Sidebar.vue`, fetch + render dataset index, search/filter UI.
+- [ ] **One-click import** — Calls `ImportFromUrl` with the proxy URL, creates TableNode, auto-generates a QueryNode pointed at it.
+- [ ] **MCP tool: `import_dataset`** — Agents can import by slug: `{"slug": "fred-us-gdp"}`. Proxy URL resolved server-side.
 
 ---
 

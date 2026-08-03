@@ -1,4 +1,4 @@
-VERSION=v0.0.1-alpha.6
+VERSION=v0.0.3-alpha
 
 sed -i '' "s/\"productVersion\": \".*\"/\"productVersion\": \"$VERSION\"/" wails.json && \
 sed -i '' "s/const appVersion = \".*\"/const appVersion = \"$VERSION\"/" app.go && \

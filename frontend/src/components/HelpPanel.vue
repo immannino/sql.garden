@@ -46,7 +46,7 @@ const SHORTCUT_SECTIONS = [
 
 const LINKS = [
   { label: 'GitHub', href: 'https://github.com/immannino/sql.garden' },
-  { label: 'Documentation', href: 'https://sql.garden/docs' },
+  { label: 'Documentation', href: 'https://sql.garden/' },
   { label: 'Report Issue', href: 'https://github.com/immannino/sql.garden/issues' },
 ]
 
