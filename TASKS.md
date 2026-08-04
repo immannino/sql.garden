@@ -208,9 +208,20 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Canvas Structure
 - [x] **Canvas tabs** — See Canvas Operations above. Done.
 
+### Samples & Learning
+- [ ] **Sample picker UX — multi-section layout** — Split current flat sample list into "Built-in" (shipped with binary), "Learn" (SQL learning track), and eventually "Community" (remote CDN catalog). Small but necessary before adding new samples.
+- [ ] **In-app SQL learning track** — A curated canvas shipped with the binary. See design notes below.
+- [ ] **Personal finance / bank statement template** — In-app canvas with synthetic transaction data (generated via DuckDB SQL, no external file). Shows the full pipeline: raw import schema → normalization queries → spending by category, income vs expenses, merchant trends. Markdown node explains how to adapt column names to a real export. Lineage arrows make the raw→clean→chart flow visible.
+- [ ] **Data stories (remote, post-launch)** — Remote catalog of interesting public-data canvases (GDP + recession markers, CO₂ trends, etc.). Depends on dataset directory / proxy API infrastructure. Not in-app.
+
+### Template Distribution
+- [ ] **CDN template catalog** — `templates.json` index hosted on the marketing site CDN listing available community/educator packs (name, description, author, tags, URL to `.sql.garden.json`). Sample picker fetches it lazily and renders a "Community" section. One-click import calls existing `import_url` path. Educators host their own pack files anywhere; sql.garden only hosts the index for curated/verified packs.
+- [ ] **`sqlgarden://` custom URL scheme** — Register deep-link URL scheme (`sqlgarden://import?pack=<url>`) in `Info.plist` (macOS `CFBundleURLTypes`) and Windows registry. Two handlers needed: app already running (SSE/event from OS) and launched via URL (parse from argv). Imports the pack at the given URL after a confirmation dialog (show pack source URL + node count + SQL-will-run warning). Web sandbox handled separately via `sql.garden/sandbox?import=<url>` query param on load.
+- [ ] **Import confirmation dialog** — Required before any URL-triggered import (deep link or sandbox query param). Shows: source URL, node count, "SQL in this pack will be available to run" notice. User must click Import to proceed. Mirrors VS Code's "Are you sure?" flow for extension installs from URL.
+
 ### Discovery & Content
 - [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.
-- [ ] **Dataset directory + proxy API** — See full design below.
+- [ ] **Dataset directory + proxy API** — See full design below. Post-launch; data stories depend on this.
 - [ ] **Community / Explore page** — Longer-term hub surfacing dataset directory, user-shared canvases, blog posts, and curated data stories. Builds on the dataset directory and news feed foundations.
 
 ### Reporting
@@ -315,6 +326,57 @@ Updater job (Go binary, cron via Fly Machines or GitHub Actions schedule)
 - [ ] **Explore sidebar tab** — New tab in `Sidebar.vue`, fetch + render dataset index, search/filter UI.
 - [ ] **One-click import** — Calls `ImportFromUrl` with the proxy URL, creates TableNode, auto-generates a QueryNode pointed at it.
 - [ ] **MCP tool: `import_dataset`** — Agents can import by slug: `{"slug": "fred-us-gdp"}`. Proxy URL resolved server-side.
+
+---
+
+## 📚 In-App SQL Learning Track — Design
+
+### Goal
+A curated canvas shipped with the binary that gets a user from "I've never written SQL" to "I can answer real business questions" in a single sitting. Not a textbook — every concept answers a concrete question against real (synthetic) data. The canvas format does pedagogical work that a tutorial page can't: query, result, and next step are all visible at once.
+
+### Theme: E-commerce / Sales
+Best fit because:
+- Universally relatable domain — orders, customers, products
+- Schema complexity scales naturally (start with one table, add JOINs later)
+- Every concept maps to a meaningful business question, not abstract syntax
+- Charts emerge naturally at every level (bar for category, line for trends)
+- What most people will use SQL for in their actual jobs
+
+Synthetic data generated entirely via DuckDB SQL (`generate_series`, random functions, `strftime`) — no bundled file, always works, teaches a useful technique.
+
+### Canvas layout
+Linear left-to-right progression with a Markdown "chapter header" node before each concept cluster. Lineage arrows connect source tables → queries → charts throughout.
+
+### Chapters
+
+| # | Concept | Business question answered |
+|---|---------|---------------------------|
+| 0 | Orientation | Data model overview — what tables exist and how they relate |
+| 1 | SELECT basics | What are my most recent 10 orders? |
+| 2 | Filtering (WHERE) | Which orders are over $500? Which customers are in New York? |
+| 3 | Sorting & limiting | Who placed the largest single order? |
+| 4 | Aggregation (GROUP BY) | How much revenue does each product category generate? |
+| 5 | JOIN | Which customers have placed the most orders? (orders JOIN customers) |
+| 6 | Date functions | How has monthly revenue trended over the last year? |
+| 7 | Subqueries / CTEs | What's the average order value per customer, and who's above average? |
+| 8 | Window functions | Running total revenue; rank customers by lifetime value |
+
+Each chapter: 1 Markdown node (question + brief hint), 1–2 QueryNodes with SQL pre-written and results pre-run, 1 ChartNode where a chart is the natural output.
+
+### Philosophy
+- Every query answers a **question**, not "here is GROUP BY"
+- SQL is pre-written and runnable — users see working code immediately, tweak from there
+- Markdown nodes are brief: question, one-line hint, maybe a "try changing X" nudge
+- No hand-holding beyond that — the canvas is a starting point, not a classroom
+- If it ends up used by educators, great — but design for the curious practitioner
+
+### Implementation tasks
+- [ ] **Synthetic data generator** — DuckDB SQL that creates `lrn_customers`, `lrn_products`, `lrn_orders`, `lrn_order_items` with realistic names, dates, amounts (~500 orders, ~200 customers, ~50 products). Seeded random so data is consistent across loads. Data should have real shape: a clear top category, monthly seasonality, a handful of power customers — so charts produce meaningful output.
+- [ ] **Chapter canvas layout** — Design the node positions, section groupings, and markdown content for all 8 chapters.
+- [ ] **Wire into sample picker** — "Learn" section in the picker UI; loads the canvas fresh (clears current state with confirm).
+
+### Educator distribution
+The learning track ships in-app, but the same canvas exported as `.sql.garden.json` can be hosted anywhere and distributed via a `sqlgarden://import?pack=<url>` deep link. An educator can build their own variant, host it on their school LMS or GitHub, and share a single link that opens sql.garden and imports their pack automatically. sql.garden provides the mechanism; educators own the content and hosting.
 
 ---
 
