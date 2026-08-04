@@ -31,6 +31,7 @@ export namespace main {
 	export class CanvasAction {
 	    type: string;
 	    nodeId?: string;
+	    canvasId?: string;
 	    name: string;
 	    sql?: string;
 	    content?: string;
@@ -56,6 +57,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
 	        this.nodeId = source["nodeId"];
+	        this.canvasId = source["canvasId"];
 	        this.name = source["name"];
 	        this.sql = source["sql"];
 	        this.content = source["content"];

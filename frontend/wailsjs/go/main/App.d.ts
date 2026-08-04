@@ -38,6 +38,8 @@ export function GetAppVersion():Promise<string>;
 
 export function GetDatabaseSchemas(arg1:string):Promise<Array<main.SchemaInfo>>;
 
+export function GetDuckDBVersion():Promise<string>;
+
 export function GetMCPConfigStatus():Promise<main.MCPConfigStatus>;
 
 export function GetMCPPort():Promise<number>;

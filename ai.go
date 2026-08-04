@@ -17,28 +17,54 @@ const AISystemPrompt = `You are a data exploration assistant embedded in sql.gar
 ## What you can do
 You have tools to explore data and build the user's canvas autonomously:
 - list_tables — discover every table and its columns currently loaded
-- list_canvas_nodes — see what query nodes are already on the canvas (id + name)
+- list_canvases — list all canvas tabs with their id, name, node count, and which is active
+- create_canvas — create a new canvas tab; returns canvas id for targeting
+- rename_canvas — rename a canvas tab
+- switch_canvas — make a canvas tab active (surfaces it to the user)
+- remove_canvas — delete a canvas tab and all its nodes
+- list_canvas_nodes — see query/data nodes on the canvas; filter by canvas_id to scope to one tab
 - run_query — execute any DuckDB SQL and see real results
-- add_query_node — pin a named SQL query to the canvas; returns a node id
-- add_chart_node — pin a named visualization, optionally sourced from an existing query node via source_id
-- add_markdown_node — pin a markdown note or summary to the canvas
-- materialize_query — snapshot a SQL query's results as a persistent DuckDB table and pin it as a Data node; survives restarts unlike a query node
-- import_file — import a local CSV/Parquet/JSON file into DuckDB and add a table node
-- import_csv_data — load raw CSV text you generate directly into DuckDB; no file on disk needed
-- import_url — fetch a remote CSV/Parquet/JSON by URL into DuckDB; download is server-side so CORS is not a concern
-- import_s3 — load a file from S3, R2, or MinIO directly into DuckDB; uses credentials stored in Settings → S3 Storage; accepts s3:// URIs
-- clear_canvas — remove all nodes from the canvas (use before a full rebuild)
+- add_query_node — pin a named SQL query to the canvas; returns a node id; accepts canvas_id
+- add_chart_node — pin a named visualization, optionally sourced from an existing query node; accepts canvas_id
+- add_markdown_node — pin a markdown note or summary to the canvas; accepts canvas_id
+- materialize_query — snapshot a SQL query's results as a persistent DuckDB table and pin it as a Data node; accepts canvas_id
+- import_file — import a local CSV/Parquet/JSON file into DuckDB and add a table node; accepts canvas_id
+- import_csv_data — load raw CSV text you generate directly into DuckDB; accepts canvas_id
+- import_url — fetch a remote CSV/Parquet/JSON by URL into DuckDB; accepts canvas_id
+- import_s3 — load a file from S3, R2, or MinIO directly into DuckDB; accepts canvas_id
+- add_section — create a named Section container to visually group related nodes; accepts canvas_id
+- clear_canvas — remove all nodes from a canvas tab (canvas_id defaults to active)
 - fit_view — adjust the canvas viewport: mode="fit" zooms to show all content, mode="reset" sets zoom to 100%
 - focus_node — pan and zoom the viewport to centre on a specific node; use after adding nodes to direct the user's attention
-- update_query_node — overwrite the SQL (and optionally rename) an existing query node by id; avoids delete-and-recreate when only the query changes
+- update_query_node — overwrite the SQL (and optionally rename) an existing query node by id
 - set_node_color — apply a hex color to any canvas node by id; useful for highlighting KPIs or flagging anomalies
-- add_section — create a named Section container to visually group related nodes
+
+## Canvas tabs
+The user's workspace has multiple named canvas tabs (like browser tabs). By default every tool adds to the **active** canvas. Use canvas_id to target a different tab. Typical pattern for multi-tab work:
+1. list_canvases → discover existing tab ids
+2. create_canvas → create a new tab, capture the returned id
+3. Pass canvas_id to node-adding tools to populate that tab
+4. switch_canvas → bring the new tab into view
 
 ## Workflow
 1. Always call list_tables first so you know what's available.
 2. Use run_query freely to explore, filter, aggregate, and validate hypotheses.
 3. When you find something worth keeping, add it to the canvas.
 4. Summarize findings concisely after each investigation.
+
+## Chart type guide
+- **barY / barX** — vertical/horizontal bar; x=category, y=value
+- **lineY** — line over time or ordered x; x=time/category, y=value
+- **areaY** — filled area; same as lineY
+- **dot** — scatter; x=numeric, y=numeric, color_column=optional grouping
+- **pie / donut** — proportional slices; x=category, y=value, label_column=optional label
+- **cell** — structured grid heatmap; x=category, y=category, color driven by a third column (use color_column)
+- **number** — single large KPI value; x_column and y_column both set to the value column
+- **boolean** — true/false badge; x_column = the boolean-valued column
+- **conditional** — N-state badge (e.g. status, severity); x_column = the category column
+- **waterfall** — running-total bar chart showing incremental changes; x=category/step, y=numeric delta; bars auto-colored green (positive) / red (negative)
+- **heatmap** — 2D density via binning; x=numeric, y=numeric; good for distributions
+- **scatter-matrix** — pairwise grid of scatter plots across multiple numeric columns; set x_column to any one numeric column (the grid uses all numeric columns in the result automatically)
 
 ## DuckDB SQL tips
 DuckDB supports the full SQL standard plus many extensions:
@@ -79,13 +105,14 @@ type CanvasColumn struct {
 }
 
 type CanvasAction struct {
-	Type        string         `json:"type"`             // "query"|"chart"|"markdown"|"table"|"clear"
+	Type        string         `json:"type"`             // "query"|"chart"|"markdown"|"table"|"clear"|"add_canvas"|"remove_canvas"|"rename_canvas"|"switch_canvas"
 	NodeID      string         `json:"nodeId,omitempty"` // stable id returned to Claude so it can reference this node
+	CanvasID    string         `json:"canvasId,omitempty"` // target canvas for node actions; subject canvas for tab lifecycle actions
 	Name        string         `json:"name"`
 	SQL         string         `json:"sql,omitempty"`
 	Content     string         `json:"content,omitempty"`   // markdown body
 	SourceID    string         `json:"sourceId,omitempty"`  // id of a query node whose data this chart uses
-	ChartType   string         `json:"chartType,omitempty"` // "barY"|"barX"|"lineY"|"areaY"|"dot"|"cell"|"pie"|"donut"|"number"|"boolean"|"conditional"
+	ChartType   string         `json:"chartType,omitempty"` // "barY"|"barX"|"lineY"|"areaY"|"dot"|"cell"|"pie"|"donut"|"number"|"boolean"|"conditional"|"waterfall"|"heatmap"|"scatter-matrix"
 	XColumn     string         `json:"xColumn,omitempty"`
 	YColumn     string         `json:"yColumn,omitempty"`
 	ColorColumn string         `json:"colorColumn,omitempty"`
@@ -178,17 +205,54 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 	switch name {
 	case "list_tables":
 		return a.toolListTables()
+	case "list_canvases":
+		return a.toolListCanvases()
 	case "list_canvas_nodes":
-		return a.toolListCanvasNodes()
+		filterCanvas, _ := input["canvas_id"].(string)
+		return a.toolListCanvasNodes(filterCanvas)
 	case "run_query":
 		sql, _ := input["sql"].(string)
 		return a.toolRunQuery(sql)
+	case "create_canvas":
+		n, _ := input["name"].(string)
+		id := "mcp_tab_" + randID()
+		if n == "" {
+			n = "New Canvas"
+		}
+		a.mcpCanvases.Store(id, n)
+		*actions = append(*actions, CanvasAction{Type: "add_canvas", CanvasID: id, Name: n})
+		return fmt.Sprintf("Created canvas name=%q id=%q — pass id as canvas_id to target this tab", n, id)
+	case "rename_canvas":
+		id, _ := input["canvas_id"].(string)
+		n, _ := input["name"].(string)
+		if id == "" || n == "" {
+			return "error: canvas_id and name are required"
+		}
+		a.mcpCanvases.Store(id, n)
+		*actions = append(*actions, CanvasAction{Type: "rename_canvas", CanvasID: id, Name: n})
+		return fmt.Sprintf("Renamed canvas %q to %q", id, n)
+	case "switch_canvas":
+		id, _ := input["canvas_id"].(string)
+		if id == "" {
+			return "error: canvas_id is required"
+		}
+		*actions = append(*actions, CanvasAction{Type: "switch_canvas", CanvasID: id})
+		return fmt.Sprintf("Switched active canvas to %q", id)
+	case "remove_canvas":
+		id, _ := input["canvas_id"].(string)
+		if id == "" {
+			return "error: canvas_id is required"
+		}
+		a.mcpCanvases.Delete(id)
+		*actions = append(*actions, CanvasAction{Type: "remove_canvas", CanvasID: id})
+		return fmt.Sprintf("Removed canvas %q", id)
 	case "add_query_node":
 		n, _ := input["name"].(string)
 		s, _ := input["sql"].(string)
+		cid, _ := input["canvas_id"].(string)
 		id := "mcp_" + nodeSlug(n)
-		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "query"})
-		*actions = append(*actions, CanvasAction{Type: "query", NodeID: id, Name: n, SQL: s})
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "query", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{Type: "query", NodeID: id, Name: n, SQL: s, CanvasID: cid})
 		return fmt.Sprintf("Added query node name=%q id=%q — use this id as source_id in add_chart_node", n, id)
 	case "add_chart_node":
 		n, _ := input["name"].(string)
@@ -199,19 +263,22 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		yc, _ := input["y_column"].(string)
 		cc, _ := input["color_column"].(string)
 		lc, _ := input["label_column"].(string)
+		cid, _ := input["canvas_id"].(string)
 		id := "mcp_" + nodeSlug(n)
-		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "chart"})
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "chart", CanvasID: cid})
 		*actions = append(*actions, CanvasAction{
 			Type: "chart", NodeID: id, Name: n, SQL: s, SourceID: sid,
 			ChartType: ct, XColumn: xc, YColumn: yc, ColorColumn: cc, LabelColumn: lc,
+			CanvasID: cid,
 		})
 		return fmt.Sprintf("Added chart node name=%q id=%q", n, id)
 	case "add_markdown_node":
 		n, _ := input["name"].(string)
 		c, _ := input["content"].(string)
+		cid, _ := input["canvas_id"].(string)
 		id := "mcp_" + nodeSlug(n)
-		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "markdown"})
-		*actions = append(*actions, CanvasAction{Type: "markdown", NodeID: id, Name: n, Content: c})
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "markdown", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{Type: "markdown", NodeID: id, Name: n, Content: c, CanvasID: cid})
 		return fmt.Sprintf("Added markdown node name=%q id=%q", n, id)
 	case "materialize_query":
 		return a.toolMaterializeQuery(input, actions)
@@ -224,12 +291,25 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 	case "import_s3":
 		return a.toolImportS3(input, actions)
 	case "clear_canvas":
-		if a.persist != nil {
-			a.persist.saveCanvasState("[]") //nolint:errcheck
+		cid, _ := input["canvas_id"].(string)
+		if cid == "" {
+			// Clear active canvas — wipe in-memory nodes that don't have a specific canvas assigned
+			a.mcpNodeRegistry.Range(func(k, v any) bool {
+				if e := v.(mcpNodeEntry); e.CanvasID == "" {
+					a.mcpNodeRegistry.Delete(k)
+				}
+				return true
+			})
+		} else {
+			// Clear a specific canvas — wipe only nodes belonging to it
+			a.mcpNodeRegistry.Range(func(k, v any) bool {
+				if e := v.(mcpNodeEntry); e.CanvasID == cid {
+					a.mcpNodeRegistry.Delete(k)
+				}
+				return true
+			})
 		}
-		// Wipe the in-memory registry so list_canvas_nodes reflects the cleared state.
-		a.mcpNodeRegistry.Range(func(k, _ any) bool { a.mcpNodeRegistry.Delete(k); return true })
-		*actions = append(*actions, CanvasAction{Type: "clear", Name: ""})
+		*actions = append(*actions, CanvasAction{Type: "clear", CanvasID: cid, Name: ""})
 		return "Canvas cleared."
 	case "resize_node":
 		id, _ := input["node_id"].(string)
@@ -280,6 +360,7 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		n, _ := input["name"].(string)
 		w, _ := input["width"].(float64)
 		h, _ := input["height"].(float64)
+		cid, _ := input["canvas_id"].(string)
 		if n == "" {
 			return "error: name is required"
 		}
@@ -290,8 +371,8 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 			h = 300
 		}
 		id := "mcp_" + nodeSlug(n)
-		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "section"})
-		*actions = append(*actions, CanvasAction{Type: "section", NodeID: id, Name: n, Width: w, Height: h})
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "section", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{Type: "section", NodeID: id, Name: n, Width: w, Height: h, CanvasID: cid})
 		return fmt.Sprintf("Added section name=%q id=%q size=%gx%g", n, id, w, h)
 	case "fit_view":
 		mode, _ := input["mode"].(string)
@@ -312,6 +393,7 @@ func (a *App) toolMaterializeQuery(input map[string]any, actions *[]CanvasAction
 	tableName, _ := input["table_name"].(string)
 	sql, _ := input["sql"].(string)
 	sourceID, _ := input["source_id"].(string)
+	canvasID, _ := input["canvas_id"].(string)
 	if tableName == "" || sql == "" {
 		return "error: table_name and sql are required"
 	}
@@ -334,7 +416,7 @@ func (a *App) toolMaterializeQuery(input map[string]any, actions *[]CanvasAction
 		canvasCols[i] = CanvasColumn{Name: c.Name, Type: c.Type}
 	}
 	id := "mcp_" + nodeSlug(tableName)
-	a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: tableName, Kind: "data"})
+	a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: tableName, Kind: "data", CanvasID: canvasID})
 	*actions = append(*actions, CanvasAction{
 		Type:     "data",
 		NodeID:   id,
@@ -343,6 +425,7 @@ func (a *App) toolMaterializeQuery(input map[string]any, actions *[]CanvasAction
 		SourceID: sourceID,
 		Columns:  canvasCols,
 		RowCount: rowCount,
+		CanvasID: canvasID,
 	})
 	return fmt.Sprintf("Materialized %q: %d rows, %d columns, id=%q — queryable as a DuckDB table", tableName, rowCount, len(cols), id)
 }
@@ -350,6 +433,7 @@ func (a *App) toolMaterializeQuery(input map[string]any, actions *[]CanvasAction
 func (a *App) toolImportFile(input map[string]any, actions *[]CanvasAction) string {
 	path, _ := input["path"].(string)
 	tableName, _ := input["table_name"].(string)
+	canvasID, _ := input["canvas_id"].(string)
 	if path == "" || tableName == "" {
 		return "error: path and table_name are required"
 	}
@@ -358,7 +442,7 @@ func (a *App) toolImportFile(input map[string]any, actions *[]CanvasAction) stri
 	if err := a.ImportFromPath(path, tableName); err != nil {
 		return "error importing file: " + err.Error()
 	}
-	return a.toolFinishImport(tableName, "import_file", actions)
+	return a.toolFinishImport(tableName, "import_file", canvasID, actions)
 }
 
 // validateCSVColumns checks that every data row has the same number of fields
@@ -395,6 +479,7 @@ func validateCSVColumns(csvText string) string {
 func (a *App) toolImportCSVData(input map[string]any, actions *[]CanvasAction) string {
 	csvText, _ := input["csv_text"].(string)
 	tableName, _ := input["table_name"].(string)
+	canvasID, _ := input["canvas_id"].(string)
 	if csvText == "" || tableName == "" {
 		return "error: csv_text and table_name are required"
 	}
@@ -444,12 +529,13 @@ func (a *App) toolImportCSVData(input map[string]any, actions *[]CanvasAction) s
 			return "error importing CSV: " + err.Error()
 		}
 	}
-	return a.toolFinishImport(tableName, "import_csv_data", actions)
+	return a.toolFinishImport(tableName, "import_csv_data", canvasID, actions)
 }
 
 func (a *App) toolImportURL(input map[string]any, actions *[]CanvasAction) string {
 	rawURL, _ := input["url"].(string)
 	tableName, _ := input["table_name"].(string)
+	canvasID, _ := input["canvas_id"].(string)
 	if rawURL == "" || tableName == "" {
 		return "error: url and table_name are required"
 	}
@@ -459,12 +545,13 @@ func (a *App) toolImportURL(input map[string]any, actions *[]CanvasAction) strin
 	if err := a.ImportFromUrl(rawURL, tableName); err != nil {
 		return "error importing URL: " + err.Error()
 	}
-	return a.toolFinishImport(tableName, "import_url", actions)
+	return a.toolFinishImport(tableName, "import_url", canvasID, actions)
 }
 
 func (a *App) toolImportS3(input map[string]any, actions *[]CanvasAction) string {
 	s3URL, _ := input["s3_url"].(string)
 	tableName, _ := input["table_name"].(string)
+	canvasID, _ := input["canvas_id"].(string)
 	if s3URL == "" || tableName == "" {
 		return "error: s3_url and table_name are required"
 	}
@@ -477,12 +564,12 @@ func (a *App) toolImportS3(input map[string]any, actions *[]CanvasAction) string
 	if err := a.ImportFromUrl(s3URL, tableName); err != nil {
 		return "error importing from S3: " + err.Error()
 	}
-	return a.toolFinishImport(tableName, "import_s3", actions)
+	return a.toolFinishImport(tableName, "import_s3", canvasID, actions)
 }
 
 // toolFinishImport handles the shared post-import steps: persist, read schema,
 // count rows, and emit a canvas table action.
-func (a *App) toolFinishImport(tableName, toolName string, actions *[]CanvasAction) string {
+func (a *App) toolFinishImport(tableName, toolName, canvasID string, actions *[]CanvasAction) string {
 	if err := a.SaveTableData(tableName); err != nil {
 		fmt.Printf("mcp %s: SaveTableData failed: %v\n", toolName, err)
 	}
@@ -502,12 +589,14 @@ func (a *App) toolFinishImport(tableName, toolName string, actions *[]CanvasActi
 	}
 
 	id := "mcp_" + nodeSlug(tableName)
+	a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: tableName, Kind: "table", CanvasID: canvasID})
 	*actions = append(*actions, CanvasAction{
 		Type:     "table",
 		NodeID:   id,
 		Name:     tableName,
 		Columns:  canvasCols,
 		RowCount: rowCount,
+		CanvasID: canvasID,
 	})
 	return fmt.Sprintf("Imported %q: %d rows, %d columns, id=%q", tableName, rowCount, len(cols), id)
 }
@@ -525,22 +614,115 @@ func nodeSlug(name string) string {
 	return strings.Trim(string(b), "_")
 }
 
-func (a *App) toolListCanvasNodes() string {
-	type entry struct{ name, kind string }
-	merged := make(map[string]entry) // id → {name, kind}
+func (a *App) toolListCanvases() string {
+	type canvasInfo struct {
+		ID        string
+		Name      string
+		IsActive  bool
+		NodeCount int
+	}
+
+	var canvases []canvasInfo
+	var activeID string
+
+	if a.persist != nil {
+		if raw, err := a.persist.loadCanvasState(); err == nil && raw != "" {
+			// Try v2 format
+			var v2 struct {
+				Version  int    `json:"version"`
+				ActiveID string `json:"activeCanvasId"`
+				Canvases []struct {
+					ID    string            `json:"id"`
+					Name  string            `json:"name"`
+					Nodes []json.RawMessage `json:"nodes"`
+				} `json:"canvases"`
+			}
+			if json.Unmarshal([]byte(raw), &v2) == nil && v2.Version == 2 {
+				activeID = v2.ActiveID
+				for _, c := range v2.Canvases {
+					canvases = append(canvases, canvasInfo{
+						ID:        c.ID,
+						Name:      c.Name,
+						IsActive:  c.ID == activeID,
+						NodeCount: len(c.Nodes),
+					})
+				}
+			}
+		}
+	}
+
+	// Merge canvases created this MCP session not yet persisted
+	a.mcpCanvases.Range(func(k, v any) bool {
+		id := k.(string)
+		for _, c := range canvases {
+			if c.ID == id {
+				return true
+			}
+		}
+		canvases = append(canvases, canvasInfo{ID: id, Name: v.(string)})
+		return true
+	})
+
+	if len(canvases) == 0 {
+		return "No canvases found — app may not be running or no state has been saved yet."
+	}
+
+	var sb strings.Builder
+	for _, c := range canvases {
+		active := ""
+		if c.IsActive {
+			active = " [active]"
+		}
+		fmt.Fprintf(&sb, "id=%q name=%q nodes=%d%s\n", c.ID, c.Name, c.NodeCount, active)
+	}
+	return sb.String()
+}
+
+func (a *App) toolListCanvasNodes(filterCanvasID string) string {
+	type entry struct {
+		name, kind, canvasID string
+	}
+	merged := make(map[string]entry)
 
 	// 1. Persisted canvas state (authoritative for nodes added before this session)
 	if a.persist != nil {
 		if raw, err := a.persist.loadCanvasState(); err == nil && raw != "" {
-			var nodes []struct {
-				Kind string `json:"kind"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
+			// Try v2 multi-canvas format
+			var v2 struct {
+				Version  int    `json:"version"`
+				ActiveID string `json:"activeCanvasId"`
+				Canvases []struct {
+					ID    string `json:"id"`
+					Nodes []struct {
+						Kind string `json:"kind"`
+						ID   string `json:"id"`
+						Name string `json:"name"`
+					} `json:"nodes"`
+				} `json:"canvases"`
 			}
-			if json.Unmarshal([]byte(raw), &nodes) == nil {
-				for _, n := range nodes {
-					if n.Kind == "query" || n.Kind == "data" {
-						merged[n.ID] = entry{name: n.Name, kind: n.Kind}
+			if json.Unmarshal([]byte(raw), &v2) == nil && v2.Version == 2 {
+				for _, canvas := range v2.Canvases {
+					if filterCanvasID != "" && canvas.ID != filterCanvasID {
+						continue
+					}
+					for _, n := range canvas.Nodes {
+						if n.Kind == "query" || n.Kind == "data" {
+							merged[n.ID] = entry{name: n.Name, kind: n.Kind, canvasID: canvas.ID}
+						}
+					}
+				}
+			} else {
+				// Legacy v1: flat array — no canvas info
+				var nodes []struct {
+					Kind string `json:"kind"`
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				}
+				if json.Unmarshal([]byte(raw), &nodes) == nil {
+					for _, n := range nodes {
+						if n.Kind == "query" || n.Kind == "data" {
+							merged[n.ID] = entry{name: n.Name, kind: n.Kind}
+						}
 					}
 				}
 			}
@@ -551,18 +733,31 @@ func (a *App) toolListCanvasNodes() string {
 	//    frontend auto-save (1 s debounce) has written them back to SQLite.
 	a.mcpNodeRegistry.Range(func(k, v any) bool {
 		e := v.(mcpNodeEntry)
-		if e.Kind == "query" || e.Kind == "data" {
-			merged[e.ID] = entry{name: e.Name, kind: e.Kind}
+		if e.Kind != "query" && e.Kind != "data" {
+			return true
 		}
+		// When filtering, skip nodes from other canvases (but include ambiguous "" nodes)
+		if filterCanvasID != "" && e.CanvasID != "" && e.CanvasID != filterCanvasID {
+			return true
+		}
+		merged[e.ID] = entry{name: e.Name, kind: e.Kind, canvasID: e.CanvasID}
 		return true
 	})
 
 	if len(merged) == 0 {
-		return "No query or data nodes on canvas yet."
+		if filterCanvasID != "" {
+			return fmt.Sprintf("No query or data nodes on canvas %q.", filterCanvasID)
+		}
+		return "No query or data nodes on any canvas."
 	}
+
 	var sb strings.Builder
 	for id, e := range merged {
-		fmt.Fprintf(&sb, "%s id=%q name=%q\n", e.kind, id, e.name)
+		if e.canvasID != "" {
+			fmt.Fprintf(&sb, "%s id=%q name=%q canvas=%q\n", e.kind, id, e.name, e.canvasID)
+		} else {
+			fmt.Fprintf(&sb, "%s id=%q name=%q\n", e.kind, id, e.name)
+		}
 	}
 	return sb.String()
 }
@@ -651,10 +846,64 @@ var anthropicTools = []map[string]any{
 		},
 	},
 	{
-		"name":        "list_canvas_nodes",
-		"description": "List all query nodes currently on the canvas with their id and name. Use source_id from these results when calling add_chart_node to avoid duplicating the data fetch.",
+		"name":        "list_canvases",
+		"description": "List all canvas tabs with their id, name, node count, and which is currently active. Call this before using canvas_id in other tools to discover available canvas ids.",
 		"input_schema": map[string]any{
 			"type": "object", "properties": map[string]any{},
+		},
+	},
+	{
+		"name":        "create_canvas",
+		"description": "Create a new canvas tab. Returns the canvas id, which you can pass as canvas_id to other tools to add nodes to it.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Display name for the new canvas tab"},
+			},
+		},
+	},
+	{
+		"name":        "rename_canvas",
+		"description": "Rename an existing canvas tab.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to rename (from list_canvases)"},
+				"name":      map[string]any{"type": "string", "description": "New display name"},
+			},
+			"required": []string{"canvas_id", "name"},
+		},
+	},
+	{
+		"name":        "switch_canvas",
+		"description": "Make a canvas tab active — brings it into view for the user. Call after building a canvas to surface the work.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to switch to (from list_canvases or create_canvas)"},
+			},
+			"required": []string{"canvas_id"},
+		},
+	},
+	{
+		"name":        "remove_canvas",
+		"description": "Delete a canvas tab and all its nodes. Cannot remove the last remaining canvas.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to remove (from list_canvases)"},
+			},
+			"required": []string{"canvas_id"},
+		},
+	},
+	{
+		"name":        "list_canvas_nodes",
+		"description": "List query/data nodes with their id and name. Pass canvas_id to filter to a specific tab; omit to see all canvases. Use the returned ids as source_id in add_chart_node.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "Filter to nodes on this canvas (from list_canvases); omit for all canvases"},
+			},
 		},
 	},
 	{
@@ -670,12 +919,13 @@ var anthropicTools = []map[string]any{
 	},
 	{
 		"name":        "add_query_node",
-		"description": "Pin a named SQL query to the user's canvas as an interactive scrollable table. Returns a node id you can pass as source_id to add_chart_node.",
+		"description": "Pin a named SQL query to the canvas as an interactive scrollable table. Returns a node id you can pass as source_id to add_chart_node.",
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Short descriptive label for the node"},
-				"sql":  map[string]any{"type": "string", "description": "SQL query to display in the node"},
+				"name":      map[string]any{"type": "string", "description": "Short descriptive label for the node"},
+				"sql":       map[string]any{"type": "string", "description": "SQL query to display in the node"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to (from list_canvases or create_canvas); default is the active canvas"},
 			},
 			"required": []string{"name", "sql"},
 		},
@@ -689,11 +939,12 @@ var anthropicTools = []map[string]any{
 				"name":         map[string]any{"type": "string"},
 				"source_id":    map[string]any{"type": "string", "description": "ID of an existing query node whose data this chart visualises (preferred over sql when the node is already on canvas)"},
 				"sql":          map[string]any{"type": "string", "description": "SQL that produces the chart data — omit when source_id is provided"},
-				"chart_type":   map[string]any{"type": "string", "enum": []string{"barY", "barX", "lineY", "areaY", "dot", "cell", "pie", "donut", "number", "boolean", "conditional"}, "description": "barY/barX=bar, lineY=line, areaY=area, dot=scatter, pie/donut=pie, cell=heatmap, number=big single value, boolean=true/false badge, conditional=N-state badge"},
+				"chart_type":   map[string]any{"type": "string", "enum": []string{"barY", "barX", "lineY", "areaY", "dot", "cell", "pie", "donut", "number", "boolean", "conditional", "waterfall", "heatmap", "scatter-matrix"}, "description": "barY/barX=bar chart, lineY=line, areaY=area, dot=scatter, pie/donut=pie chart, cell=grid heatmap, number=big single value, boolean=true/false badge, conditional=N-state badge, waterfall=running-total waterfall (needs x+y), heatmap=2D density heatmap (needs x+y), scatter-matrix=pairwise scatter grid (use x_column for any numeric col; set multiple via matrixColumns)"},
 				"x_column":     map[string]any{"type": "string", "description": "Column for the x-axis / category"},
 				"y_column":     map[string]any{"type": "string", "description": "Column for the y-axis / value"},
 				"color_column": map[string]any{"type": "string", "description": "Optional column for grouping/color"},
 				"label_column": map[string]any{"type": "string", "description": "Optional column for slice labels (pie/donut)"},
+				"canvas_id":    map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"name", "chart_type", "x_column", "y_column"},
 		},
@@ -704,8 +955,9 @@ var anthropicTools = []map[string]any{
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":    map[string]any{"type": "string", "description": "Short title for the node"},
-				"content": map[string]any{"type": "string", "description": "Markdown content"},
+				"name":      map[string]any{"type": "string", "description": "Short title for the node"},
+				"content":   map[string]any{"type": "string", "description": "Markdown content"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"name", "content"},
 		},
@@ -719,6 +971,7 @@ var anthropicTools = []map[string]any{
 				"table_name": map[string]any{"type": "string", "description": "DuckDB table name for the snapshot (snake_case recommended)"},
 				"sql":        map[string]any{"type": "string", "description": "SQL query whose results are materialized — do not include a trailing semicolon"},
 				"source_id":  map[string]any{"type": "string", "description": "Optional ID of a query node this was derived from, used for canvas linking"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"table_name", "sql"},
 		},
@@ -731,6 +984,7 @@ var anthropicTools = []map[string]any{
 			"properties": map[string]any{
 				"path":       map[string]any{"type": "string", "description": "Absolute path to the file (CSV, Parquet, JSON, JSONL)"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"path", "table_name"},
 		},
@@ -743,6 +997,7 @@ var anthropicTools = []map[string]any{
 			"properties": map[string]any{
 				"csv_text":   map[string]any{"type": "string", "description": "Full CSV content including header row"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"csv_text", "table_name"},
 		},
@@ -755,6 +1010,7 @@ var anthropicTools = []map[string]any{
 			"properties": map[string]any{
 				"url":        map[string]any{"type": "string", "description": "Public URL to the data file (CSV, Parquet, JSON, JSONL)"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"url", "table_name"},
 		},
@@ -767,6 +1023,7 @@ var anthropicTools = []map[string]any{
 			"properties": map[string]any{
 				"s3_url":     map[string]any{"type": "string", "description": "S3 URI to the data file, e.g. s3://my-bucket/data/sales.parquet"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"s3_url", "table_name"},
 		},
@@ -813,18 +1070,22 @@ var anthropicTools = []map[string]any{
 		"input_schema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":   map[string]any{"type": "string", "description": "Label for the section"},
-				"width":  map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
-				"height": map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+				"name":      map[string]any{"type": "string", "description": "Label for the section"},
+				"width":     map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
+				"height":    map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the section to; default is the active canvas"},
 			},
 			"required": []string{"name"},
 		},
 	},
 	{
 		"name":        "clear_canvas",
-		"description": "Remove all nodes from the canvas. Use before a full rebuild to avoid duplicates.",
+		"description": "Remove all nodes from a canvas. If canvas_id is omitted, clears the active canvas.",
 		"input_schema": map[string]any{
-			"type": "object", "properties": map[string]any{},
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to clear (from list_canvases); omit to clear the active canvas"},
+			},
 		},
 	},
 	{

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import Canvas from './components/Canvas.vue'
+import CanvasTabs from './components/CanvasTabs.vue'
 import QueryPanel from './components/QueryPanel.vue'
 import ImportModal from './components/ImportModal.vue'
 import Sidebar from './components/Sidebar.vue'
@@ -24,6 +25,7 @@ import { useChartResults } from './composables/useChartResults'
 import { exportData, type ExportFormat } from './lib/exportData'
 import { useSelection } from './composables/useSelection'
 import { IS_DESKTOP } from './lib/env'
+import { usePendingFullscreen } from './composables/usePendingFullscreen'
 import type { main } from '../wailsjs/go/models'
 
 const { init, isReady, isLoading, initError, exec, query, getTableInfo, importTableFromJSON } = useDuckDB()
@@ -33,9 +35,10 @@ const { markAppReady } = useAppReady()
 const { loadTheme } = useTheme()
 const { selectedIds } = useSelection()
 const { contextMenu, close: closeContextMenu } = useContextMenu()
-const { openPanel } = useChartPanel()
+const { openPanel, closePanel } = useChartPanel()
 const { results: queryResults } = useQueryResults()
 const { chartResults } = useChartResults()
+const { pendingFullscreenId } = usePendingFullscreen()
 const showPalette = ref(false)
 const showSettings = ref(false)
 const settingsInitialTab = ref<'appearance' | 'mcp' | 'updates' | undefined>(undefined)
@@ -147,17 +150,19 @@ async function exportCanvasMarkdown() {
   }
 }
 
-function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
+function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string; openFullscreen?: boolean }) {
   const center = canvasRef.value?.getCenter() ?? { x: 300, y: 300 }
   if (payload.type === 'query') {
     const n = schemaStore.nodes.filter((n) => n.kind === 'query').length + 1
+    const id = `query_${Date.now()}`
     schemaStore.addQueryNode({
-      id: `query_${Date.now()}`,
+      id,
       name: `query_${n}`,
       x: center.x - 140,
       y: center.y - 80,
       sql: payload.sql,
     })
+    if (payload.openFullscreen) pendingFullscreenId.value = id
   } else {
     const n = schemaStore.nodes.filter((n) => n.kind === 'chart').length + 1
     schemaStore.addChartNode({
@@ -172,6 +177,38 @@ function onPanelCreate(payload: { type: 'query' | 'chart'; sql: string }) {
       yColumn: '',
     })
   }
+}
+
+// ── Canvas tab management ─────────────────────────────────────────────────────
+function onTabSwitch(id: string) {
+  if (id === schemaStore.activeCanvasId) return
+  // Save current viewport before switching
+  if (canvasRef.value) schemaStore.saveViewport(schemaStore.activeCanvasId, canvasRef.value.getViewport())
+  closePanel()
+  pendingFullscreenId.value = null
+  schemaStore.switchCanvas(id)
+  nextTick(() => {
+    const vp = schemaStore.getViewport(id)
+    if (vp) canvasRef.value?.setViewport(vp.x, vp.y, vp.zoom)
+    else canvasRef.value?.fitView()
+  })
+}
+
+function onTabAdd() {
+  if (canvasRef.value) schemaStore.saveViewport(schemaStore.activeCanvasId, canvasRef.value.getViewport())
+  closePanel()
+  schemaStore.addCanvas()
+  nextTick(() => canvasRef.value?.fitView())
+}
+
+function onTabRemove(id: string) {
+  schemaStore.removeCanvas(id)
+  if (id !== schemaStore.activeCanvasId) return
+  nextTick(() => {
+    const vp = schemaStore.getViewport(schemaStore.activeCanvasId)
+    if (vp) canvasRef.value?.setViewport(vp.x, vp.y, vp.zoom)
+    else canvasRef.value?.fitView()
+  })
 }
 
 const canvasRef = ref<InstanceType<typeof Canvas> | null>(null)
@@ -281,6 +318,7 @@ function contextMenuSections(): MenuSection[] {
   const items: MenuSection[] = []
 
   if (isSection) {
+    items.push({ label: 'Fit to Contents', action: () => fitSectionContents(id) })
     items.push({ label: 'Mosaic Contents', action: () => mosaicSectionContents(id) })
     items.push({ divider: true })
   }
@@ -299,8 +337,24 @@ function contextMenuSections(): MenuSection[] {
         if (newId) { selectedIds.value = new Set([newId]); canvasRef.value?.focusNode(newId) }
       },
     })
-    items.push({ divider: true })
   }
+
+  // Cross-tab copy — show one item per other canvas
+  const copyIds = selectedIds.value.size > 1 && selectedIds.value.has(id)
+    ? [...selectedIds.value].filter(sid => schemaStore.nodes.find(n => n.id === sid)?.kind !== 'section')
+    : (node.kind !== 'section' ? [id] : [])
+  const otherCanvases = schemaStore.canvases.filter(c => c.id !== schemaStore.activeCanvasId)
+  if (copyIds.length && otherCanvases.length) {
+    items.push({ divider: true })
+    for (const canvas of otherCanvases) {
+      items.push({
+        label: `Copy to "${canvas.name}"`,
+        action: () => schemaStore.copyNodesToCanvas(copyIds, canvas.id),
+      })
+    }
+  }
+
+  if (!isSection) items.push({ divider: true })
 
   const exportIds = selectedIds.value.size > 1 && selectedIds.value.has(id)
     ? [...selectedIds.value]
@@ -349,6 +403,27 @@ function serializeForExport(node: CanvasNode): Record<string, unknown> {
   // Spread all fields; drop sqlHistory (internal undo state, not useful in export)
   const { sqlHistory: _drop, ...rest } = node as any
   return rest
+}
+
+const CLIPBOARD_TAG = '__sqlgarden_nodes__'
+
+async function copySelectedToClipboard() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  const toCopy = schemaStore.nodes.filter(n => ids.includes(n.id))
+  try {
+    await navigator.clipboard.writeText(JSON.stringify({ [CLIPBOARD_TAG]: true, nodes: toCopy.map(serializeForExport) }))
+  } catch { /* clipboard access denied */ }
+}
+
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (!text) return
+    const data = JSON.parse(text)
+    if (data[CLIPBOARD_TAG] !== true || !Array.isArray(data.nodes)) return
+    await importNodeBundle(data.nodes)
+  } catch { /* not our format or access denied */ }
 }
 
 async function doExportNodes(nodeIds: string[]) {
@@ -675,9 +750,33 @@ async function exportNodeData(nodeId: string, fmt: ExportFormat) {
 }
 
 function handleCanvasAction(action: main.CanvasAction) {
+  // ── Canvas tab lifecycle ────────────────────────────────────────────────────
+  if (action.type === 'add_canvas') {
+    schemaStore.addCanvas({ id: action.canvasId || undefined, name: action.name || undefined })
+    return
+  }
+  if (action.type === 'remove_canvas') {
+    if (action.canvasId) schemaStore.removeCanvas(action.canvasId)
+    return
+  }
+  if (action.type === 'rename_canvas') {
+    if (action.canvasId && action.name) schemaStore.renameCanvas(action.canvasId, action.name)
+    return
+  }
+  if (action.type === 'switch_canvas') {
+    if (action.canvasId) onTabSwitch(action.canvasId)
+    return
+  }
+
+  // ── Canvas-wide operations ──────────────────────────────────────────────────
   if (action.type === 'clear') {
-    schemaStore.clear()
-    aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
+    if (action.canvasId) {
+      const tab = schemaStore.canvases.find(c => c.id === action.canvasId)
+      if (tab) tab.nodes = []
+    } else {
+      schemaStore.clear()
+      aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
+    }
     return
   }
   if (action.type === 'fit_view') {
@@ -695,6 +794,8 @@ function handleCanvasAction(action: main.CanvasAction) {
     if (nodeId) exportNodeData(nodeId, fmt)
     return
   }
+
+  // ── Node mutation (no canvas targeting needed — nodes are referenced by id) ─
   if (action.type === 'resize_node') {
     if (action.nodeId && action.width && action.height)
       schemaStore.updateNodeSize(action.nodeId, action.width, action.height)
@@ -726,12 +827,21 @@ function handleCanvasAction(action: main.CanvasAction) {
     if (action.nodeId) schemaStore.setNodeColor(action.nodeId, action.name)
     return
   }
+
+  // ── Node creation — route to target canvas if specified ────────────────────
   const pos = action.hasPosition ? { x: action.x ?? 0, y: action.y ?? 0 } : nextAIPosition()
   const id = action.nodeId ?? `ai_${Date.now()}`
+  const targetCanvasId = (action as any).canvasId as string | undefined
+
+  const withTarget = (fn: () => void) => {
+    if (targetCanvasId) schemaStore.addNodeToCanvas(targetCanvasId, fn)
+    else fn()
+  }
+
   if (action.type === 'query') {
-    schemaStore.addQueryNode({ id, name: action.name, sql: action.sql ?? '', ...pos })
+    withTarget(() => schemaStore.addQueryNode({ id, name: action.name, sql: action.sql ?? '', ...pos }))
   } else if (action.type === 'chart') {
-    schemaStore.addChartNode({
+    withTarget(() => schemaStore.addChartNode({
       id, name: action.name, ...pos,
       sql: action.sql ?? '',
       sourceId: action.sourceId ?? null,
@@ -740,16 +850,18 @@ function handleCanvasAction(action: main.CanvasAction) {
       yColumn: action.yColumn ?? '',
       colorColumn: action.colorColumn || undefined,
       labelColumn: action.labelColumn || undefined,
-    })
+    }))
   } else if (action.type === 'markdown') {
-    schemaStore.addMarkdownNode({ id, name: action.name, ...pos, content: action.content ?? '' })
+    withTarget(() => schemaStore.addMarkdownNode({ id, name: action.name, ...pos, content: action.content ?? '' }))
   } else if (action.type === 'table') {
     const cols = (action.columns ?? []).map((c) => ({ name: c.name, type: c.type }))
-    schemaStore.addTable({ id, name: action.name, ...pos, columns: cols })
-    if (action.rowCount) schemaStore.setRowCount(id, action.rowCount)
+    withTarget(() => {
+      schemaStore.addTable({ id, name: action.name, ...pos, columns: cols })
+      if (action.rowCount) schemaStore.setRowCount(id, action.rowCount)
+    })
   } else if (action.type === 'data') {
     const cols = (action.columns ?? []).map((c) => ({ name: c.name, type: c.type }))
-    schemaStore.addDataNode({
+    withTarget(() => schemaStore.addDataNode({
       id,
       name: action.name,
       ...pos,
@@ -757,15 +869,15 @@ function handleCanvasAction(action: main.CanvasAction) {
       rowCount: Number(action.rowCount ?? 0),
       sourceId: action.sourceId || undefined,
       sourceSql: action.sql || undefined,
-    })
+    }))
   } else if (action.type === 'section') {
-    schemaStore.addSection({
+    withTarget(() => schemaStore.addSection({
       id,
       name: action.name,
       ...pos,
       w: action.width || 400,
       h: action.height || 300,
-    })
+    }))
   }
   if (!action.hasPosition) setTimeout(() => canvasRef.value?.fitView(), 120)
 }
@@ -954,6 +1066,36 @@ function wrapInSection() {
   setTimeout(() => canvas.fitView(), 50)
 }
 
+function fitSectionContents(sectionId: string) {
+  const section = schemaStore.nodes.find((n) => n.id === sectionId)
+  if (!section || section.kind !== 'section') return
+
+  const inside = schemaStore.nodes.filter((n) => {
+    if (n.kind === 'section' || n.id === sectionId) return false
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const nw = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const nh = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    const cx = n.x + nw / 2
+    const cy = n.y + nh / 2
+    return cx >= section.x && cx <= section.x + section.w && cy >= section.y && cy <= section.y + section.h
+  })
+  if (!inside.length) return
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const n of inside) {
+    const el = document.querySelector(`[data-node-id="${n.id}"]`) as HTMLElement | null
+    const nw = el ? el.offsetWidth : (('w' in n ? n.w : undefined) ?? 280)
+    const nh = el ? el.offsetHeight : (('h' in n ? n.h : undefined) ?? 120)
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y)
+    maxX = Math.max(maxX, n.x + nw); maxY = Math.max(maxY, n.y + nh)
+  }
+
+  const PAD = 20, TOP_PAD = 52
+  schemaStore.snapshot()
+  schemaStore.updatePositions(new Map([[sectionId, { x: minX - PAD, y: minY - TOP_PAD }]]))
+  schemaStore.updateNodeSize(sectionId, maxX - minX + PAD * 2, maxY - minY + TOP_PAD + PAD)
+}
+
 function mosaicSectionContents(sectionId: string) {
   const canvas = canvasRef.value
   if (!canvas) return
@@ -1044,6 +1186,17 @@ function onGlobalKey(e: KeyboardEvent) {
     return
   }
 
+  // ⌘1–⌘9: switch tabs — works even from code editors
+  if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
+    const idx = parseInt(e.key) - 1
+    const tabTarget = schemaStore.canvases[idx]
+    if (tabTarget && tabTarget.id !== schemaStore.activeCanvasId) {
+      e.preventDefault()
+      onTabSwitch(tabTarget.id)
+    }
+    return
+  }
+
   // Never intercept when focus is in a text field or code editor
   const target = e.target as HTMLElement
   const tag = target.tagName
@@ -1054,7 +1207,10 @@ function onGlobalKey(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey) {
     if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); schemaStore.undo(); return }
     if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); schemaStore.redo(); return }
+    if (e.key === 'c' && selectedIds.value.size > 0) { e.preventDefault(); copySelectedToClipboard(); return }
+    if (e.key === 'v') { e.preventDefault(); pasteFromClipboard(); return }
     if (e.key === ',') { e.preventDefault(); showSettings.value = !showSettings.value }
+    if (e.key === 't') { e.preventDefault(); onTabAdd(); return }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
     if (e.key === '-') { e.preventDefault(); canvasRef.value?.zoomOut() }
     if (e.key === '0') { e.preventDefault(); canvasRef.value?.fitView() }
@@ -1263,8 +1419,8 @@ onUnmounted(async () => {
           @click="onRestoreClick"
         >
           <svg viewBox="0 0 16 16" fill="none">
-            <path d="M2 8A6 6 0 1 1 5 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <polyline points="2,1 2,5 6,5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M12.3 5.5A5 5 0 1 1 8 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <polyline points="6,1 8,3 6,5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           {{ restoreConfirm ? 'Reset?' : 'Restore' }}
         </button>
@@ -1373,15 +1529,26 @@ onUnmounted(async () => {
           @click="showQuery = !showQuery"
         >
           <svg viewBox="0 0 16 16" fill="none">
-            <polyline points="2,5 7,10 2,15" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" :transform="showQuery ? 'rotate(90 8 10)' : ''"/>
-            <line x1="10" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            <line x1="10" y1="4" x2="14" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="6.5" y1="2.5" x2="6.5" y2="13.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="9" y1="5.5" x2="12.5" y2="5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="8" x2="12.5" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="9" y1="10.5" x2="12.5" y2="10.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
           </svg>
           Query
         </button>
       </div>
     </header>
+
+    <!-- Canvas tabs -->
+    <CanvasTabs
+      :canvases="schemaStore.canvases"
+      :active-id="schemaStore.activeCanvasId"
+      @switch="onTabSwitch"
+      @add="onTabAdd"
+      @remove="onTabRemove"
+      @rename="schemaStore.renameCanvas"
+    />
 
     <!-- Main content -->
     <div class="main-area">
@@ -1418,7 +1585,7 @@ onUnmounted(async () => {
       </nav>
 
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" @create-query="onCreateQueryFromConnection" />
-      <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" />
+      <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" @fit-contents="fitSectionContents" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
 
       <!-- Help button + panel -->
@@ -1823,7 +1990,7 @@ onUnmounted(async () => {
 /* ── Help button ─────────────────────────────────────────────────────────── */
 .help-btn {
   position: absolute;
-  bottom: 24px;
+  bottom: 52px;
   right: 24px;
   z-index: 20;
   width: 32px;

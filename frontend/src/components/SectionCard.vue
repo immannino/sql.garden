@@ -12,6 +12,7 @@ const emit = defineEmits<{
   dragStart: [{ id: string; mouseX: number; mouseY: number; shiftKey: boolean }]
   resizeStart: [{ id: string; mouseX: number; mouseY: number; startW: number; startH: number; direction: 'e' | 's' | 'se' }]
   mosaicContents: [id: string]
+  fitContents: [id: string]
 }>()
 
 const schemaStore = useSchemaStore()
@@ -86,6 +87,15 @@ function onRenameKey(e: KeyboardEvent) {
 
       <div class="section-label-actions">
         <NodeColorPicker :color="node.color" @pick="schemaStore.setNodeColor(node.id, $event)" />
+        <button
+          class="section-icon-btn"
+          title="Fit section to contents"
+          @click.stop="emit('fitContents', node.id)"
+        >
+          <svg viewBox="0 0 12 12" fill="none">
+            <path d="M1 4.5V1h3.5M7.5 1H11v3.5M11 7.5V11H7.5M4.5 11H1V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button
           class="section-icon-btn"
           title="Mosaic contents"

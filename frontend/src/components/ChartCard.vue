@@ -164,14 +164,15 @@ async function runLinked() {
 const showLegend = ref(true)
 
 // ── Display-type guards ───────────────────────────────────────────────────────
-const isPlotType    = computed(() => !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey'].includes(props.node.chartType))
-const isStatType    = computed(() => props.node.chartType === 'number')
-const isBoolType    = computed(() => props.node.chartType === 'boolean')
-const isCondType    = computed(() => props.node.chartType === 'conditional')
-const isBadgeType   = computed(() => isBoolType.value || isCondType.value)
-const isMermaidType = computed(() => props.node.chartType === 'mermaid')
-const isTableType   = computed(() => props.node.chartType === 'table')
-const isSankeyType  = computed(() => props.node.chartType === 'sankey')
+const isPlotType       = computed(() => !['number', 'boolean', 'conditional', 'mermaid', 'table', 'sankey', 'scatter-matrix'].includes(props.node.chartType))
+const isStatType       = computed(() => props.node.chartType === 'number')
+const isBoolType       = computed(() => props.node.chartType === 'boolean')
+const isCondType       = computed(() => props.node.chartType === 'conditional')
+const isBadgeType      = computed(() => isBoolType.value || isCondType.value)
+const isMermaidType    = computed(() => props.node.chartType === 'mermaid')
+const isTableType      = computed(() => props.node.chartType === 'table')
+const isSankeyType     = computed(() => props.node.chartType === 'sankey')
+const isScatterMatrix  = computed(() => props.node.chartType === 'scatter-matrix')
 
 // ── Stat (number) computed ────────────────────────────────────────────────────
 const statValue = computed(() => {
@@ -431,6 +432,7 @@ watchEffect(() => {
     }
     const fill = colorColumn ?? color, stroke = colorColumn ?? color
     const marks: Plot.Markish[] = []
+    let colorOptions: Record<string, unknown> | undefined = colorColumn ? { legend: showLegend.value } : undefined
     switch (chartType) {
       case 'barY':      marks.push(Plot.barY(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleY([0])); break
       case 'barX':      marks.push(Plot.barX(data.rows, { x: xColumn, y: yColumn, fill }), Plot.ruleX([0])); break
@@ -439,14 +441,31 @@ watchEffect(() => {
       case 'cell':      marks.push(Plot.cell(data.rows, { x: xColumn, y: yColumn, fill })); break
       case 'histogram': marks.push(Plot.rectY(data.rows, { ...Plot.binX({ y: 'count' }, { x: xColumn }), fill: fill ?? '#4e79a7' } as Parameters<typeof Plot.rectY>[1]), Plot.ruleY([0])); break
       case 'boxplot':   marks.push(Plot.boxY(data.rows, { x: xColumn, y: yColumn, fill: fill ?? '#4e79a7' })); break
+      case 'waterfall': {
+        let cum = 0
+        const wd = data.rows.map((row) => {
+          const v = Number(row[yColumn!]) || 0; const s = cum; cum += v
+          return { ...row, _s: s, _e: cum, _pos: v >= 0 }
+        })
+        marks.push(
+          Plot.barY(wd as Record<string, unknown>[], { x: xColumn, y1: '_s', y2: '_e', fill: (d: Record<string, unknown>) => d._pos ? '#3fb950' : '#f85149' }),
+          Plot.ruleY([0])
+        )
+        break
+      }
+      case 'heatmap': {
+        marks.push(Plot.rect(data.rows, { ...Plot.bin({ fill: 'count' }, { x: xColumn, y: yColumn }) } as Parameters<typeof Plot.rect>[1]))
+        colorOptions = { scheme: 'YlOrRd', legend: showLegend.value }
+        break
+      }
       default:          marks.push(Plot.dot(data.rows, { x: xColumn, y: yColumn, fill })); break
     }
-    if (labelColumn && chartType !== 'histogram' && chartType !== 'boxplot') {
+    if (labelColumn && chartType !== 'histogram' && chartType !== 'boxplot' && chartType !== 'waterfall') {
       marks.push(Plot.text(data.rows, { x: xColumn, y: yColumn, text: labelColumn, fontSize: 9, fill: 'currentColor', dy: -6 }))
     }
     const el = Plot.plot({
       width: plotW, height: plotH, marginBottom: 36, marginLeft: 42,
-      color: colorColumn ? { legend: showLegend.value } : undefined,
+      color: colorOptions as Plot.PlotOptions['color'],
       style: { background: 'none', color: '#8b949e', fontSize: '10px', overflow: 'visible' },
       marks,
     })
@@ -588,6 +607,60 @@ watch(
   },
   { immediate: true },
 )
+
+// ── Scatter-matrix rendering ──────────────────────────────────────────────────
+const matrixContainer = ref<HTMLDivElement | null>(null)
+
+watchEffect(() => {
+  const el = matrixContainer.value
+  if (!isScatterMatrix.value || !el) return
+
+  const data = effectiveData.value
+  const cols = props.node.matrixColumns ?? []
+  if (!data || cols.length < 2) {
+    el.innerHTML = ''
+    return
+  }
+
+  const n = cols.length
+  const totalW = (props.node.w ?? 340) - 32
+  const cellSize = Math.max(60, Math.floor((totalW - (n - 1) * 4) / n))
+  const nodeColor = props.node.color
+
+  const grid = document.createElement('div')
+  grid.style.cssText = `display:grid;grid-template-columns:repeat(${n},${cellSize}px);gap:4px;padding:8px 16px;overflow:auto;`
+
+  for (let ri = 0; ri < n; ri++) {
+    for (let ci = 0; ci < n; ci++) {
+      const cell = document.createElement('div')
+      cell.style.cssText = `width:${cellSize}px;height:${cellSize}px;overflow:hidden;flex-shrink:0;`
+
+      if (ri === ci) {
+        cell.style.cssText += 'display:flex;align-items:center;justify-content:center;background:var(--surface-2);border-radius:4px;'
+        const lbl = document.createElement('span')
+        lbl.textContent = cols[ri]
+        lbl.style.cssText = 'font-size:9px;font-family:var(--font-mono,monospace);color:var(--text-secondary,#8b949e);text-align:center;word-break:break-all;padding:4px;line-height:1.3;'
+        cell.appendChild(lbl)
+      } else {
+        try {
+          const plotEl = Plot.plot({
+            width: cellSize, height: cellSize, margin: 8,
+            x: { axis: ri === n - 1 ? 'bottom' : null, ticks: 2 },
+            y: { axis: ci === 0 ? 'left' : null, ticks: 2 },
+            style: { background: 'none', color: '#8b949e', fontSize: '7px', overflow: 'visible' },
+            marks: [Plot.dot(data.rows, { x: cols[ci], y: cols[ri], fill: nodeColor, r: 2, fillOpacity: 0.6 })]
+          })
+          cell.appendChild(plotEl)
+        } catch {
+          cell.style.cssText += 'display:flex;align-items:center;justify-content:center;'
+          cell.innerHTML = '<span style="font-size:9px;color:var(--text-muted,#6e7681)">—</span>'
+        }
+      }
+      grid.appendChild(cell)
+    }
+  }
+  el.replaceChildren(grid)
+})
 
 // ── Export ────────────────────────────────────────────────────────────────────
 function onExport(fmt: ExportFormat) {
@@ -774,7 +847,7 @@ onUnmounted(() => {
       </button>
 
       <!-- Chart image export -->
-      <div v-if="isPlotType || isSankeyType" class="export-img-wrap">
+      <div v-if="isPlotType || isSankeyType || isScatterMatrix" class="export-img-wrap">
         <button
           class="collapse-btn"
           title="Export chart image"
@@ -894,6 +967,21 @@ onUnmounted(() => {
           <path d="M4 24h6l4-8 6 4h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         <span>{{ !effectiveData ? 'Run a query to load data' : 'Set Source and Target columns in the properties panel' }}</span>
+        <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
+      </div>
+    </div>
+
+    <!-- Scatter matrix display -->
+    <div v-if="!isCollapsed && isScatterMatrix" class="chart-area" :style="{ height: `${(node.h ?? 280) + 36}px` }">
+      <div ref="matrixContainer" class="chart-plot" style="overflow:auto;" />
+      <div v-if="!effectiveData || !node.matrixColumns || node.matrixColumns.length < 2" class="chart-placeholder">
+        <svg viewBox="0 0 32 32" fill="none">
+          <rect x="2" y="2" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="17" y="2" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="2" y="17" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+          <rect x="17" y="17" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+        </svg>
+        <span>{{ !effectiveData ? 'Run a query to load data' : 'Select 2+ columns in the properties panel' }}</span>
         <button class="open-props-btn" @mousedown.stop @click.stop="openPanel(node.id)">Open properties</button>
       </div>
     </div>

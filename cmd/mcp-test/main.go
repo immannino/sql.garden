@@ -57,6 +57,7 @@ const (
 type canvasAction struct {
 	Type      string  `json:"type"`
 	NodeID    string  `json:"nodeId"`
+	CanvasID  string  `json:"canvasId"`
 	Name      string  `json:"name"`
 	SQL       string  `json:"sql"`
 	Content   string  `json:"content"`
@@ -252,6 +253,22 @@ func findAction(actions []canvasAction, typ string) *canvasAction {
 	return nil
 }
 
+// extractCanvasID pulls the canvas id from a create_canvas response string.
+// The response format is: …id="<id>"…
+func extractCanvasID(resp string) string {
+	const marker = `id="`
+	idx := strings.Index(resp, marker)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(marker)
+	end := strings.Index(resp[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return resp[start : start+end]
+}
+
 // ── Scenarios ─────────────────────────────────────────────────────────────────
 
 func (r *runner) runAll() {
@@ -277,7 +294,8 @@ func (r *runner) runAll() {
 			return err
 		}
 		required := []string{
-			"list_tables", "list_canvas_nodes", "run_query",
+			"list_tables", "list_canvases", "list_canvas_nodes", "run_query",
+			"create_canvas", "rename_canvas", "switch_canvas", "remove_canvas",
 			"add_query_node", "add_chart_node", "add_markdown_node",
 			"materialize_query",
 			"import_file", "import_csv_data", "import_url", "import_s3",
@@ -1448,6 +1466,440 @@ func (r *runner) runAll() {
 		}
 		if !strings.Contains(strings.ToLower(resp), "error") {
 			return fmt.Errorf("expected error for missing name, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── Canvas tabs ───────────────────────────────────────────────────────────
+
+	r.run("list_canvases: returns at least one canvas with [active] marker", func() error {
+		resp, _, err := r.call("list_canvases", nil)
+		if err != nil {
+			return err
+		}
+		if resp == "" || strings.Contains(resp, "No canvases") {
+			return fmt.Errorf("expected canvas list, got: %q", resp)
+		}
+		if !strings.Contains(resp, "[active]") {
+			return fmt.Errorf("expected [active] marker in list, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("create_canvas: emits add_canvas action with mcp_tab_ id and correct name", func() error {
+		resp, actions, err := r.call("create_canvas", map[string]any{"name": "Test Tab"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if !strings.HasPrefix(cid, "mcp_tab_") {
+			return fmt.Errorf("expected id starting with mcp_tab_, got %q (response: %q)", cid, resp)
+		}
+		act := findAction(actions, "add_canvas")
+		if act == nil {
+			return fmt.Errorf("no 'add_canvas' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		if act.Name != "Test Tab" {
+			return fmt.Errorf("want name=%q, got %q", "Test Tab", act.Name)
+		}
+		return nil
+	})
+
+	r.run("create_canvas: default name used when name omitted", func() error {
+		_, actions, err := r.call("create_canvas", nil)
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "add_canvas")
+		if act == nil {
+			return fmt.Errorf("no 'add_canvas' canvas action received")
+		}
+		if act.Name == "" {
+			return fmt.Errorf("expected non-empty default name, got empty")
+		}
+		if !strings.HasPrefix(act.CanvasID, "mcp_tab_") {
+			return fmt.Errorf("expected canvasId starting with mcp_tab_, got %q", act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("rename_canvas: emits rename_canvas action with correct canvasId and name", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Rename Me"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		resp2, actions, err := r.call("rename_canvas", map[string]any{
+			"canvas_id": cid,
+			"name":      "Renamed Canvas",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp2), "error") {
+			return fmt.Errorf("rename_canvas returned error: %q", resp2)
+		}
+		act := findAction(actions, "rename_canvas")
+		if act == nil {
+			return fmt.Errorf("no 'rename_canvas' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		if act.Name != "Renamed Canvas" {
+			return fmt.Errorf("want name=%q, got %q", "Renamed Canvas", act.Name)
+		}
+		return nil
+	})
+
+	r.run("rename_canvas: missing canvas_id returns error", func() error {
+		resp, _, err := r.call("rename_canvas", map[string]any{"name": "X"})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing canvas_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("rename_canvas: missing name returns error", func() error {
+		resp, _, err := r.call("rename_canvas", map[string]any{"canvas_id": "some_id"})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing name, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("switch_canvas: emits switch_canvas action with correct canvasId", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Switch Target"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("switch_canvas", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "switch_canvas")
+		if act == nil {
+			return fmt.Errorf("no 'switch_canvas' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("switch_canvas: missing canvas_id returns error", func() error {
+		resp, _, err := r.call("switch_canvas", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing canvas_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("remove_canvas: emits remove_canvas action with correct canvasId", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "To Be Removed"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		resp2, actions, err := r.call("remove_canvas", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp2), "error") {
+			return fmt.Errorf("remove_canvas returned error: %q", resp2)
+		}
+		act := findAction(actions, "remove_canvas")
+		if act == nil {
+			return fmt.Errorf("no 'remove_canvas' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("remove_canvas: missing canvas_id returns error", func() error {
+		resp, _, err := r.call("remove_canvas", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing canvas_id, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── canvas_id on node-adding tools ────────────────────────────────────────
+
+	r.run("add_query_node: canvas_id propagates to canvas action", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Query Target Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("add_query_node", map[string]any{
+			"name":      "Canvas Targeted Query",
+			"sql":       "SELECT 1 AS n",
+			"canvas_id": cid,
+		})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "query")
+		if act == nil {
+			return fmt.Errorf("no 'query' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("add_chart_node: canvas_id propagates to canvas action", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Chart Target Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("add_chart_node", map[string]any{
+			"name":       "Canvas Chart",
+			"sql":        "SELECT 'A' AS x, 10 AS y",
+			"chart_type": "barY",
+			"x_column":   "x",
+			"y_column":   "y",
+			"canvas_id":  cid,
+		})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "chart")
+		if act == nil {
+			return fmt.Errorf("no 'chart' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("add_markdown_node: canvas_id propagates to canvas action", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Markdown Target Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("add_markdown_node", map[string]any{
+			"name":      "Canvas Note",
+			"content":   "# Note\nThis goes on a specific canvas.",
+			"canvas_id": cid,
+		})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "markdown")
+		if act == nil {
+			return fmt.Errorf("no 'markdown' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("add_section: canvas_id propagates to canvas action", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Section Target Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("add_section", map[string]any{
+			"name":      "Canvas Section",
+			"canvas_id": cid,
+		})
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "section")
+		if act == nil {
+			return fmt.Errorf("no 'section' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	// ── list_canvas_nodes with canvas_id filter ───────────────────────────────
+
+	r.run("list_canvas_nodes: canvas_id filter scopes results to that canvas", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Filter Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		// Add a node with a deterministic id to this specific canvas.
+		_, _, err = r.call("add_query_node", map[string]any{
+			"name":      "Filter Tab Node",
+			"sql":       "SELECT 777 AS n",
+			"canvas_id": cid,
+		})
+		if err != nil {
+			return err
+		}
+		resp2, _, err := r.call("list_canvas_nodes", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp2, "mcp_filter_tab_node") {
+			return fmt.Errorf("expected mcp_filter_tab_node in filtered list, got: %q", resp2)
+		}
+		return nil
+	})
+
+	r.run("list_canvas_nodes: no canvas_id returns nodes across all canvases", func() error {
+		// Add a node on the active canvas (no canvas_id).
+		_, _, err := r.call("add_query_node", map[string]any{
+			"name": "Global List Node",
+			"sql":  "SELECT 888 AS n",
+		})
+		if err != nil {
+			return err
+		}
+		resp, _, err := r.call("list_canvas_nodes", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp, "mcp_global_list_node") {
+			return fmt.Errorf("expected mcp_global_list_node in global list, got: %q", resp)
+		}
+		return nil
+	})
+
+	// ── clear_canvas with canvas_id ───────────────────────────────────────────
+
+	r.run("clear_canvas: canvas_id scopes clear action to that canvas", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Clear Target Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		resp2, actions, err := r.call("clear_canvas", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp2), "error") {
+			return fmt.Errorf("clear_canvas returned error: %q", resp2)
+		}
+		act := findAction(actions, "clear")
+		if act == nil {
+			return fmt.Errorf("no 'clear' canvas action received")
+		}
+		if act.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q on clear action, got %q", cid, act.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("clear_canvas: no canvas_id clears active canvas (empty canvasId on action)", func() error {
+		_, actions, err := r.call("clear_canvas", nil)
+		if err != nil {
+			return err
+		}
+		act := findAction(actions, "clear")
+		if act == nil {
+			return fmt.Errorf("no 'clear' canvas action received")
+		}
+		if act.CanvasID != "" {
+			return fmt.Errorf("want empty canvasId for active-canvas clear, got %q", act.CanvasID)
+		}
+		return nil
+	})
+
+	// ── end-to-end multi-canvas scenario ─────────────────────────────────────
+
+	r.run("canvas tabs end-to-end: create → populate → list filter → remove", func() error {
+		// 1. Create a dedicated canvas.
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "E2E Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+
+		// 2. Add two query nodes targeting this canvas.
+		for _, name := range []string{"E2E Query Alpha", "E2E Query Beta"} {
+			if _, _, err = r.call("add_query_node", map[string]any{
+				"name":      name,
+				"sql":       "SELECT 1",
+				"canvas_id": cid,
+			}); err != nil {
+				return fmt.Errorf("add %q: %w", name, err)
+			}
+		}
+
+		// 3. Filtered list shows both nodes (from in-memory registry).
+		listResp, _, err := r.call("list_canvas_nodes", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		for _, wantID := range []string{"mcp_e2e_query_alpha", "mcp_e2e_query_beta"} {
+			if !strings.Contains(listResp, wantID) {
+				return fmt.Errorf("expected %q in filtered list, got: %q", wantID, listResp)
+			}
+		}
+
+		// 4. Switch to the canvas, then remove it.
+		if _, _, err = r.call("switch_canvas", map[string]any{"canvas_id": cid}); err != nil {
+			return fmt.Errorf("switch: %w", err)
+		}
+		_, actions, err := r.call("remove_canvas", map[string]any{"canvas_id": cid})
+		if err != nil {
+			return err
+		}
+		if findAction(actions, "remove_canvas") == nil {
+			return fmt.Errorf("no 'remove_canvas' action after removal")
 		}
 		return nil
 	})

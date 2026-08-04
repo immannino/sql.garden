@@ -74,6 +74,10 @@ export function GetDatabaseSchemas(arg1) {
   return window['go']['main']['App']['GetDatabaseSchemas'](arg1);
 }
 
+export function GetDuckDBVersion() {
+  return window['go']['main']['App']['GetDuckDBVersion']();
+}
+
 export function GetMCPConfigStatus() {
   return window['go']['main']['App']['GetMCPConfigStatus']();
 }

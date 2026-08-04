@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { useDuckDB } from './useDuckDB'
 import { useSchemaStore } from '../stores/schema'
-import type { Column, ChartNode, MarkdownNode, DataNode } from '../stores/schema'
+import type { Column, CanvasNode, ChartNode, MarkdownNode, DataNode } from '../stores/schema'
 import { IS_DESKTOP } from '../lib/env'
 import { usePersistenceWeb } from './usePersistence.web'
 import {
@@ -59,72 +59,74 @@ function useDesktopPersistence() {
     await DeleteTableData(name)
   }
 
-  // Serialises the full canvas to SQLite. Called by startAutoSave on every change.
+  function serializeNode(node: CanvasNode): Record<string, unknown> {
+    if (node.kind === 'table') {
+      const { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode }
+    }
+    if (node.kind === 'data') {
+      const { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode }
+    }
+    if (node.kind === 'query') {
+      const { kind, id, name, x, y, color, sql, isView, refreshInterval, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, sql, isView, refreshInterval, w, h, viewMode }
+    }
+    if (node.kind === 'markdown') {
+      const { kind, id, name, x, y, color, content, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, content, w, h, viewMode }
+    }
+    if (node.kind === 'section') {
+      const { kind, id, name, x, y, color, w, h } = node
+      return { kind, id, name, x, y, color, w, h }
+    }
+    // chart — include all config fields
+    const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn,
+            chartLabel, trueText, falseText, trueColor, falseColor, conditions, mermaidCode, matrixColumns,
+            tableColumnConfigs, w, h, viewMode } = node
+    return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn,
+             chartLabel, trueText, falseText, trueColor, falseColor, conditions, mermaidCode, matrixColumns,
+             tableColumnConfigs, w, h, viewMode }
+  }
+
+  // Serialises all canvases to SQLite. Called by startAutoSave on every change.
   function saveCanvas(): void {
-    const payload = schemaStore.nodes.map((node) => {
-      if (node.kind === 'table') {
-        const { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, columns, columnCasts, w, h, viewMode }
-      }
-      if (node.kind === 'data') {
-        const { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, columns, rowCount, sourceId, sourceSql, columnCasts, w, h, viewMode }
-      }
-      if (node.kind === 'query') {
-        const { kind, id, name, x, y, color, sql, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, sql, w, h, viewMode }
-      }
-      if (node.kind === 'markdown') {
-        const { kind, id, name, x, y, color, content, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, content, w, h, viewMode }
-      }
-      if (node.kind === 'section') {
-        const { kind, id, name, x, y, color, w, h } = node
-        return { kind, id, name, x, y, color, w, h }
-      }
-      // chart
-      const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode } = node
-      return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode }
-    })
+    const payload = {
+      version: 2,
+      activeCanvasId: schemaStore.activeCanvasId,
+      canvases: schemaStore.canvases.map(tab => ({
+        id: tab.id,
+        name: tab.name,
+        nodes: tab.nodes.map(serializeNode),
+      })),
+    }
     SaveCanvasState(JSON.stringify(payload)).catch(console.warn)
   }
 
   // ── Restore from SQLite ─────────────────────────────────────────────────────
 
-  async function restoreFromSQLite(raw: string): Promise<boolean> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let saved: any[]
-    try { saved = JSON.parse(raw) } catch { return false }
-    if (!saved.length) return false
-
-    // Always start from a clean slate — prevents accumulation on HMR or double-mount.
-    schemaStore.clear()
-
+  // Restores a flat array of node entries into the currently active canvas.
+  // Returns the number of physical tables/data nodes actually loaded.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function restoreNodeEntries(entries: any[]): Promise<number> {
     let tablesRestored = 0
-
-    for (const entry of saved) {
+    for (const entry of entries) {
       const kind: string = entry.kind ?? 'table'
       try {
         if (kind === 'table') {
           const parquetPath = await GetTableDataPath(entry.name)
           if (!parquetPath) continue
-
-          // Import directly from the parquet file on disk — no base64, no IDB.
           await ImportFromPath(parquetPath, entry.name)
-
           const safeTable = entry.name.replace(/"/g, '""')
           const [columns, countResult] = await Promise.all([
             getTableInfo(entry.name),
             query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
           ])
-          const rowCount = Number(countResult.rows[0]?.n ?? 0)
-          const cols: Column[] = columns
-
-          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: cols, columnCasts: entry.columnCasts, w: entry.w, h: entry.h, viewMode: entry.viewMode })
-          schemaStore.setRowCount(entry.id, rowCount)
+          schemaStore.addTable({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, columns: columns as Column[], columnCasts: entry.columnCasts, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          schemaStore.setRowCount(entry.id, Number(countResult.rows[0]?.n ?? 0))
           tablesRestored++
         } else if (kind === 'query') {
-          schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, isView: entry.isView ?? false, w: entry.w, h: entry.h, viewMode: entry.viewMode })
+          schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, isView: entry.isView ?? false, refreshInterval: entry.refreshInterval, w: entry.w, h: entry.h, viewMode: entry.viewMode })
           if (entry.isView && entry.sql?.trim()) {
             import('../../wailsjs/go/main/App').then(({ CreateView }) =>
               CreateView(entry.name, entry.sql).catch(console.warn)
@@ -142,6 +144,10 @@ function useDesktopPersistence() {
             sourceId: entry.sourceId ?? null, sql: entry.sql ?? '',
             chartType: entry.chartType ?? 'barY', xColumn: entry.xColumn ?? '', yColumn: entry.yColumn ?? '',
             colorColumn: entry.colorColumn, labelColumn: entry.labelColumn,
+            chartLabel: entry.chartLabel, trueText: entry.trueText, falseText: entry.falseText,
+            trueColor: entry.trueColor, falseColor: entry.falseColor, conditions: entry.conditions,
+            mermaidCode: entry.mermaidCode, matrixColumns: entry.matrixColumns,
+            tableColumnConfigs: entry.tableColumnConfigs,
             w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addChartNode(c)
@@ -150,12 +156,8 @@ function useDesktopPersistence() {
         } else if (kind === 'data') {
           const parquetPath = await GetTableDataPath(entry.name)
           if (!parquetPath) continue
-
           await ImportFromPath(parquetPath, entry.name)
-
           const safeTable = entry.name.replace(/"/g, '""')
-
-          // Re-apply any stored column casts
           if (entry.columnCasts && Object.keys(entry.columnCasts).length > 0) {
             for (const [colName, cast] of Object.entries(entry.columnCasts as Record<string, { type: string; expr: string }>)) {
               const safeCol = colName.replace(/"/g, '""')
@@ -165,19 +167,14 @@ function useDesktopPersistence() {
               await exec(alterSQL).catch((e: unknown) => console.warn(`Cast restore failed for ${colName}:`, e))
             }
           }
-
           const [columns, countResult] = await Promise.all([
             getTableInfo(entry.name),
             query(`SELECT COUNT(*) AS n FROM "${safeTable}"`),
           ])
-          const rowCount = Number(countResult.rows[0]?.n ?? 0)
-          const cols: Column[] = columns
-
           schemaStore.addDataNode({
             id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color,
-            columns: cols, rowCount,
-            sourceId: entry.sourceId, sourceSql: entry.sourceSql,
-            columnCasts: entry.columnCasts,
+            columns: columns as Column[], rowCount: Number(countResult.rows[0]?.n ?? 0),
+            sourceId: entry.sourceId, sourceSql: entry.sourceSql, columnCasts: entry.columnCasts,
             w: entry.w, h: entry.h, viewMode: entry.viewMode,
           } as Omit<DataNode, 'kind' | 'color'> & { color?: string })
           tablesRestored++
@@ -186,16 +183,41 @@ function useDesktopPersistence() {
         console.warn(`Failed to restore node "${entry.name ?? entry.id}":`, e)
       }
     }
+    return tablesRestored
+  }
 
-    if (tablesRestored > 0) {
+  async function restoreFromSQLite(raw: string): Promise<boolean> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let saved: any
+    try { saved = JSON.parse(raw) } catch { return false }
+
+    // ── v2 format: { version: 2, activeCanvasId, canvases: [{id, name, nodes}] }
+    if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.version === 2) {
+      const tabs: Array<{ id: string; name: string; nodes: unknown[] }> = saved.canvases ?? []
+      if (!tabs.length) return false
+
+      schemaStore.loadCanvases(tabs.map(t => ({ id: t.id, name: t.name })), saved.activeCanvasId ?? tabs[0].id)
+
+      let totalNodes = 0
+      for (const tab of tabs) {
+        schemaStore.switchCanvas(tab.id)
+        const entries = Array.isArray(tab.nodes) ? tab.nodes : []
+        await restoreNodeEntries(entries)
+        totalNodes += entries.length
+      }
+      schemaStore.switchCanvas(saved.activeCanvasId ?? tabs[0].id)
+      schemaStore.setColorCursor(totalNodes)
+      return totalNodes > 0
+    }
+
+    // ── v1 format: flat array of nodes (legacy)
+    if (Array.isArray(saved) && saved.length > 0) {
+      schemaStore.clear()
+      await restoreNodeEntries(saved)
       schemaStore.setColorCursor(saved.length)
       return true
     }
-    // Non-table nodes (query/chart/markdown) still count as a restored canvas.
-    if (saved.length > 0) {
-      schemaStore.setColorCursor(saved.length)
-      return true
-    }
+
     return false
   }
 
@@ -295,7 +317,7 @@ function useDesktopPersistence() {
 
   function startAutoSave(): void {
     watch(
-      () => schemaStore.nodes,
+      () => schemaStore.canvases,
       () => {
         if (_saveTimer) clearTimeout(_saveTimer)
         _saveTimer = setTimeout(() => { saveCanvas() }, 1000)

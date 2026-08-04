@@ -78,7 +78,7 @@ export interface ChartNode {
   y: number
   sourceId: string | null
   sql: string
-  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'histogram' | 'boxplot' | 'sankey' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
+  chartType: 'barY' | 'barX' | 'lineY' | 'areaY' | 'dot' | 'cell' | 'pie' | 'donut' | 'histogram' | 'boxplot' | 'sankey' | 'waterfall' | 'heatmap' | 'scatter-matrix' | 'number' | 'boolean' | 'conditional' | 'mermaid' | 'table'
   xColumn: string
   yColumn: string
   colorColumn?: string
@@ -94,6 +94,8 @@ export interface ChartNode {
   conditions?: ConditionRule[]
   // mermaid type
   mermaidCode?: string
+  // scatter-matrix type
+  matrixColumns?: string[]
   // table type
   tableColumnConfigs?: Record<string, TableColumnConfig>
   color: string
@@ -146,6 +148,12 @@ export interface DataNode {
 
 export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode | DataNode
 
+export interface CanvasTab {
+  id: string
+  name: string
+  nodes: CanvasNode[]
+}
+
 const PALETTE = [
   '#6366f1', '#8b5cf6', '#06b6d4', '#10b981',
   '#f59e0b', '#ef4444', '#ec4899', '#3b82f6',
@@ -158,7 +166,81 @@ function nextColor(override?: string): string {
 }
 
 export const useSchemaStore = defineStore('schema', () => {
-  const nodes = ref<CanvasNode[]>([])
+  // ── Multi-canvas ────────────────────────────────────────────────────────────
+  const _canvases = ref<CanvasTab[]>([{ id: 'tab_1', name: 'Main', nodes: [] }])
+  const _activeId  = ref<string>('tab_1')
+  const _viewports = ref<Record<string, { x: number; y: number; zoom: number }>>({})
+
+  const canvases      = computed(() => _canvases.value)
+  const activeCanvasId = computed(() => _activeId.value)
+  const _activeCanvas = computed(() => _canvases.value.find(c => c.id === _activeId.value) ?? _canvases.value[0])
+
+  // Writable computed — all existing node mutations work unchanged
+  const nodes = computed({
+    get: () => _activeCanvas.value.nodes,
+    set: (val: CanvasNode[]) => { _activeCanvas.value.nodes = val },
+  })
+
+  function addCanvas(nameOrOpts?: string | { id?: string; name?: string }): string {
+    const resolvedId = typeof nameOrOpts === 'object' && nameOrOpts?.id ? nameOrOpts.id : `tab_${Date.now()}`
+    const resolvedName = typeof nameOrOpts === 'string'
+      ? nameOrOpts
+      : (typeof nameOrOpts === 'object' ? nameOrOpts?.name : undefined) ?? `Canvas ${_canvases.value.length + 1}`
+    _canvases.value.push({ id: resolvedId, name: resolvedName, nodes: [] })
+    switchCanvas(resolvedId)
+    return resolvedId
+  }
+
+  function addNodeToCanvas(canvasId: string, addFn: () => void) {
+    if (!canvasId || canvasId === _activeId.value) { addFn(); return }
+    const saved = _activeId.value
+    _activeId.value = canvasId
+    addFn()
+    _activeId.value = saved
+  }
+
+  function removeCanvas(id: string) {
+    if (_canvases.value.length <= 1) return
+    const idx = _canvases.value.findIndex(c => c.id === id)
+    if (idx === -1) return
+    const wasActive = _activeId.value === id
+    _canvases.value.splice(idx, 1)
+    if (wasActive) {
+      _activeId.value = _canvases.value[Math.max(0, idx - 1)].id
+      _undoStack.value = []
+      _redoStack.value = []
+    }
+  }
+
+  function renameCanvas(id: string, name: string) {
+    const tab = _canvases.value.find(c => c.id === id)
+    if (tab && name.trim()) tab.name = name.trim()
+  }
+
+  function switchCanvas(id: string) {
+    if (id === _activeId.value) return
+    _undoStack.value = []
+    _redoStack.value = []
+    _activeId.value = id
+  }
+
+  function saveViewport(id: string, vp: { x: number; y: number; zoom: number }) {
+    _viewports.value[id] = vp
+  }
+
+  function getViewport(id: string): { x: number; y: number; zoom: number } | undefined {
+    return _viewports.value[id]
+  }
+
+  // Called by persistence layer before filling nodes per-canvas
+  function loadCanvases(tabs: Array<{ id: string; name: string }>, activeId: string) {
+    _canvases.value = tabs.map(t => ({ id: t.id, name: t.name, nodes: [] }))
+    _activeId.value = tabs.find(t => t.id === activeId) ? activeId : (tabs[0]?.id ?? 'tab_1')
+    _viewports.value = {}
+    _undoStack.value = []
+    _redoStack.value = []
+    colorCursor = 0
+  }
 
   // ── Undo / Redo ────────────────────────────────────────────────────────────
   const _undoStack = ref<string[]>([])
@@ -308,7 +390,7 @@ export const useSchemaStore = defineStore('schema', () => {
     if (n?.kind === 'query') n.isView = isView
   }
 
-  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions' | 'mermaidCode' | 'tableColumnConfigs'>>) {
+  function updateChartConfig(id: string, updates: Partial<Pick<ChartNode, 'sourceId' | 'sql' | 'chartType' | 'xColumn' | 'yColumn' | 'colorColumn' | 'labelColumn' | 'chartLabel' | 'trueText' | 'falseText' | 'trueColor' | 'falseColor' | 'conditions' | 'mermaidCode' | 'matrixColumns' | 'tableColumnConfigs'>>) {
     const n = nodes.value.find((n) => n.id === id)
     if (n?.kind === 'chart') Object.assign(n, updates)
   }
@@ -379,12 +461,40 @@ export const useSchemaStore = defineStore('schema', () => {
     return newId
   }
 
+  function copyNodesToCanvas(ids: string[], targetCanvasId: string) {
+    const target = _canvases.value.find(c => c.id === targetCanvasId)
+    if (!target || targetCanvasId === _activeId.value) return
+    const toCopy = nodes.value.filter(n => ids.includes(n.id))
+    if (!toCopy.length) return
+    const existingNames = new Set(target.nodes.map(n => n.name))
+    const ts = Date.now()
+    toCopy.forEach((src, i) => {
+      let name = src.name; let counter = 2
+      while (existingNames.has(name)) name = `${src.name}_${counter++}`
+      existingNames.add(name)
+      const newId = `${src.kind}_${ts}_${i}`
+      let clone: CanvasNode
+      if (src.kind === 'table') {
+        clone = { ...src, id: newId, name, columns: src.columns.map(c => ({ ...c })) }
+      } else if (src.kind === 'data') {
+        clone = { ...src, id: newId, name, columns: src.columns.map(c => ({ ...c })) }
+      } else if (src.kind === 'chart') {
+        clone = { ...src, id: newId, name, conditions: src.conditions?.map(r => ({ ...r })) }
+      } else {
+        clone = { ...src, id: newId, name }
+      }
+      target.nodes.push(clone)
+    })
+  }
+
   function setColorCursor(n: number) {
     colorCursor = n
   }
 
   function clear() {
-    nodes.value = []
+    _canvases.value = [{ id: 'tab_1', name: 'Main', nodes: [] }]
+    _activeId.value = 'tab_1'
+    _viewports.value = {}
     colorCursor = 0
     _undoStack.value = []
     _redoStack.value = []
@@ -392,11 +502,13 @@ export const useSchemaStore = defineStore('schema', () => {
 
   return {
     nodes,
+    canvases, activeCanvasId,
+    addCanvas, removeCanvas, renameCanvas, switchCanvas, addNodeToCanvas, saveViewport, getViewport, loadCanvases,
     addTable, addQueryNode, addChartNode, addMarkdownNode, addSection, addDataNode, updateDataNode, updateTableNode,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     moveNodeToIndex, bringToFront, sendToBack,
     setRowCount, updateQuerySql, pushQueryHistory, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,
-    setNodeColor, duplicateNode, setColorCursor, clear,
+    setNodeColor, duplicateNode, copyNodesToCanvas, setColorCursor, clear,
     snapshot, undo, redo, canUndo, canRedo,
   }
 })

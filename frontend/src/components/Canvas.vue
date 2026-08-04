@@ -8,12 +8,12 @@ import MarkdownCard from './MarkdownCard.vue'
 import SectionCard from './SectionCard.vue'
 import DataCard from './DataCard.vue'
 import { useSchemaStore } from '../stores/schema'
-import type { CanvasNode, SectionNode, DataNode } from '../stores/schema'
+import type { CanvasNode, SectionNode, DataNode, ChartNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
 import { usePrefs } from '../composables/usePrefs'
 
-const emit = defineEmits<{ mosaicContents: [id: string] }>()
+const emit = defineEmits<{ mosaicContents: [id: string]; fitContents: [id: string] }>()
 
 const schemaStore = useSchemaStore()
 const { selectedIds, selectNode, clearSelection } = useSelection()
@@ -341,7 +341,45 @@ function getViewportRect(): { x: number; y: number; w: number; h: number } {
   }
 }
 
-defineExpose({ fitView, resetZoom, zoomIn, zoomOut, getCenter, getViewportRect, getNodeCanvasBounds, focusNode, zoom, pan })
+function getViewport(): { x: number; y: number; zoom: number } {
+  return { x: pan.value.x, y: pan.value.y, zoom: zoom.value }
+}
+
+function setViewport(x: number, y: number, z: number) {
+  pan.value = { x, y }
+  zoom.value = z
+}
+
+defineExpose({ fitView, resetZoom, zoomIn, zoomOut, getCenter, getViewportRect, getNodeCanvasBounds, focusNode, zoom, pan, getViewport, setViewport })
+
+// ── Lineage arrows ────────────────────────────────────────────────────────────
+const NODE_DEFAULT_W: Record<string, number> = { query: 360, table: 240, chart: 340, data: 220, markdown: 300, section: 400 }
+
+const nodeMap = computed(() => {
+  const m = new Map<string, CanvasNode>()
+  for (const n of schemaStore.nodes) m.set(n.id, n)
+  return m
+})
+
+const lineageLinks = computed(() => {
+  const links: { id: string; d: string }[] = []
+  for (const node of schemaStore.nodes) {
+    const srcId = (node as ChartNode | DataNode).sourceId
+    if (!srcId) continue
+    const src = nodeMap.value.get(srcId)
+    if (!src) continue
+
+    const srcW = (src as any).w ?? NODE_DEFAULT_W[src.kind] ?? 300
+    const x1 = src.x + srcW
+    const y1 = src.y + 20
+    const x2 = node.x
+    const y2 = node.y + 20
+
+    const dx = Math.max(Math.abs(x2 - x1) * 0.4, 80)
+    links.push({ id: `${srcId}->${node.id}`, d: `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}` })
+  }
+  return links
+})
 
 onMounted(() => {
   window.addEventListener('mousemove', onMouseMove)
@@ -370,6 +408,21 @@ onUnmounted(() => {
     <div class="canvas-grid" />
 
     <div class="canvas-layer" :style="transformStyle">
+      <!-- Lineage arrows — rendered below all node cards -->
+      <svg v-if="lineageLinks.length" class="lineage-svg" aria-hidden="true">
+        <defs>
+          <marker id="lineage-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="var(--accent)" fill-opacity="0.45" />
+          </marker>
+        </defs>
+        <path
+          v-for="link in lineageLinks"
+          :key="link.id"
+          :d="link.d"
+          class="lineage-path"
+          marker-end="url(#lineage-arrow)"
+        />
+      </svg>
       <!-- Sections render first (behind all other nodes) -->
       <SectionCard
         v-for="node in schemaStore.nodes.filter(n => n.kind === 'section')"
@@ -379,6 +432,7 @@ onUnmounted(() => {
         @drag-start="onCardDragStart"
         @resize-start="onCardResizeStart"
         @mosaic-contents="emit('mosaicContents', $event)"
+        @fit-contents="emit('fitContents', $event)"
       />
       <!-- Other nodes -->
       <template v-for="node in schemaStore.nodes.filter(n => n.kind !== 'section')" :key="node.id">
@@ -467,6 +521,23 @@ onUnmounted(() => {
   width: 0;
   height: 0;
   overflow: visible;
+}
+
+.lineage-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.lineage-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-opacity: 0.4;
 }
 
 .zoom-badge {

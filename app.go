@@ -29,9 +29,10 @@ import (
 // mcpNodeEntry is a lightweight record of a node added via MCP/AI this session,
 // kept in memory so list_canvas_nodes doesn't depend on the frontend auto-save.
 type mcpNodeEntry struct {
-	ID   string
-	Name string
-	Kind string // "query" | "chart" | "markdown" | "table" | "data"
+	ID       string
+	Name     string
+	Kind     string // "query" | "chart" | "markdown" | "table" | "data"
+	CanvasID string // canvas the node belongs to ("" = active canvas at creation time)
 }
 
 // App holds all application state. Every exported method becomes a callable
@@ -42,6 +43,7 @@ type App struct {
 	persist         *PersistenceDB
 	mcpSrv          *mcpServer
 	mcpNodeRegistry sync.Map // id → mcpNodeEntry
+	mcpCanvases     sync.Map // id → name (canvases created via MCP this session)
 }
 
 func NewApp() *App {
@@ -666,10 +668,20 @@ func (a *App) SaveS3Credentials(creds S3Credentials) error {
 	return a.persist.saveSetting(s3CredentialsKey, string(raw))
 }
 
-const appVersion = "v0.0.1-alpha.6"
+const appVersion = "v0.0.4-alpha"
 
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
+
+// GetDuckDBVersion returns the DuckDB version string (e.g. "v1.1.3") by
+// querying the runtime, so it always matches the bundled go-duckdb build.
+func (a *App) GetDuckDBVersion() (string, error) {
+	var v string
+	if err := a.duck.QueryRow("SELECT version()").Scan(&v); err != nil {
+		return "", err
+	}
+	return v, nil
+}
 
 // UpdateInfo is the result of CheckForUpdate.
 type UpdateInfo struct {
