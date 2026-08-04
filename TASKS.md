@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.1-alpha
-> Updated: 2026-07-14 (session 10)
+> Updated: 2026-08-03 (session 13)
 
 ---
 
@@ -36,13 +36,14 @@
 - [x] Publish as DuckDB VIEW toggle
 - [x] Auto-refresh interval support
 - [x] Schema-aware SQL autocomplete (table + column names from canvas)
+- [x] **Auto-refresh countdown indicator** — `↻ Xs` badge in footer (both normal and fullscreen views) when a refresh interval is active; ticks every second via a separate `_countdownTimer`; resets on each interval fire; green color matching the active-refresh select state.
 - [x] Empty result set shows 0 rows instead of null error
 - [x] Query history per node — History tab, per-node log of past SQL runs with restore
 - [x] Error display moved to bottom — full multiline error in an expanding panel below the footer (red background, scrollable, dismissable ✕); removed truncated single-line error from status bar
 - [x] Default card width 360px + `flex-wrap: wrap` on footer — prevents button overflow on narrower viewports
 
 ### Chart Nodes
-- [x] Chart types: barY, barX, lineY, areaY, dot, cell, pie/donut, number, boolean, conditional, mermaid, table, histogram, boxplot, sankey
+- [x] Chart types: barY, barX, lineY, areaY, dot, cell, pie/donut, number, boolean, conditional, mermaid, table, histogram, boxplot, sankey, waterfall, heatmap, scatter-matrix
 - [x] Source: inline SQL or linked Query node
 - [x] Inline SQL editor (CodeMirror) with schema autocomplete
 - [x] Chart-only view mode
@@ -51,12 +52,16 @@
 - [x] Table chart with column config (format, align, hide, rename)
 - [x] Chart legend toggle — show/hide color legend without re-running
 - [x] Per-chart help text in properties panel (when/columns/tip)
+- [x] AI chart prompt extended to all 14 types — `## Chart type guide` section in system prompt; `chart_type` enum updated in both Anthropic tool defs and MCP tool defs
 
 ### Canvas Operations
 - [x] Multi-node alignment tools — 8 ops: left/centerH/right/top/middleV/bottom/distributeH/distributeV
 - [x] Right-click context menu — Node: Duplicate, Bring to Front/Back, Delete. Canvas: Add nodes, Fit View.
-- [x] Undo/redo — Cmd+Z / Cmd+Shift+Z, snapshots on all mutating operations
+- [x] Undo/redo — Cmd+Z / Cmd+Shift+Z, snapshots on all mutating operations (store: `snapshot()`, `undo()`, `redo()`, `canUndo`, `canRedo`)
 - [x] Auto-fit mosaic layout — toolbar button + right-click "Wrap in Section" + "Mosaic Contents" on Section nodes; uses real DOM sizes via `data-node-id`
+- [x] **Canvas tabs** — Multiple named canvases as tabs (Figma-style). Store: `_canvases` ref with `{ id, name, nodes[] }` per tab, writable computed `nodes` redirects all existing mutations. Tab strip in `CanvasTabs.vue`: × close (left, hover), name (center), ⌘N hint (right, always visible). ⌘1–⌘9 switch tabs (fires before `inInput` guard). Persistence: v2 format `{ version, activeCanvasId, canvases: [{id, name, nodes}] }`. `addCanvas` accepts `string | { id?, name? }` for MCP-supplied IDs.
+- [x] **Node lineage arrows** — SVG overlay inside `.canvas-layer` (inherits canvas transform). Cubic bezier curves from right-edge of source query node to left-edge of dependent chart/data nodes. Uses `sourceId` field; 40% opacity `--accent` stroke with small arrowhead marker. Only rendered when lineage links exist.
+- [x] **⌘K node search palette** — `SearchPalette.vue` with fuzzy name filter, kind chips, keyboard nav (↑↓ Enter Esc), jumps to node via `focusNode`. Fixed hardcoded dark-mode colors → CSS variables for light theme support.
 
 ### Sidebar
 - [x] Layers tab (z-order, drag reorder, front/back)
@@ -82,9 +87,10 @@
 - [x] `import_url` MCP tool — server-side fetch of remote CSV/Parquet/JSON; bypasses CORS entirely
 - [x] `import_s3` MCP tool — load files from `s3://` URIs; validates scheme prefix, delegates to `importFromS3` with stored credentials; 3 validation error tests
 - [x] `materialize_query` MCP tool — snapshot a SQL query as a persistent DuckDB table + DataNode; survives restarts, accepts optional `source_id` for canvas linking; trailing semicolons stripped automatically
-- [x] `list_canvas_nodes` extended — now returns both `query` and `data` nodes, with kind prefix in output (`query id=... name=...` / `data id=... name=...`)
+- [x] `list_canvas_nodes` extended — now returns both `query` and `data` nodes, with kind prefix in output; accepts optional `canvas_id` filter for multi-canvas setups
 - [x] `set_node_color` MCP tool — set accent color of any canvas node by id; useful for highlighting KPIs or flagging anomalies
 - [x] `add_section` MCP tool — create a named Section container; width/height configurable, defaults to 400×300
+- [x] **Canvas tab MCP tools** — `list_canvases`, `create_canvas` (random `mcp_tab_<hex>` ID, returned in response), `rename_canvas`, `switch_canvas`, `remove_canvas`; all node-adding tools accept optional `canvas_id` to target any tab (defaults to active); `clear_canvas` scoped by `canvas_id`; `CanvasAction` struct extended with `canvasId` field; `mcpCanvases sync.Map` on `App` tracks MCP-created tabs; `addNodeToCanvas` store helper temporarily redirects `_activeId` for cross-tab writes
 
 ### Data Nodes
 - [x] `DataNode` type (`kind: 'data'`) — materialized DuckDB table as a first-class canvas node; `name` is the DuckDB table name
@@ -167,12 +173,13 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [x] `add_section` — emits section action with name/dimensions, defaults to 400×300, missing name error (3 scenarios)
 - [x] `tools/list` — updated to assert `import_s3` is registered
 - [x] `import_s3` — missing s3_url error, non-s3:// scheme error, missing table_name error (3 validation scenarios)
+- [x] **Canvas tab tool tests** — `tools/list` updated to assert `list_canvases`, `create_canvas`, `rename_canvas`, `switch_canvas`, `remove_canvas` are registered; 22 new scenarios across 8 groups: list_canvases, create_canvas (×2 including ID extraction from response), rename_canvas (×3), switch_canvas (×2), remove_canvas (×2), `canvas_id` targeting on 4 node tools, `list_canvas_nodes` filter (×2), `clear_canvas` scoped (×2), end-to-end multi-canvas flow; `extractCanvasID` helper parses `id="..."` from response text
 
 ---
 
 ## 🔧 Known Issues / Needs Verification
 
-- [ ] **Clipboard shim needs rebuild** — The Go `ClipboardGet`/`ClipboardSet` methods and their JS bindings are new. Requires `wails dev` or `wails build` to regenerate `wailsjs/go/main/App.js` before the shim in App.vue and SqlEditor.vue takes effect.
+- [x] **Clipboard shim** — Go `ClipboardGet`/`ClipboardSet` methods and JS bindings are in place; `wailsjs/go/main/App.js` regenerated as part of normal build cycle.
 
 - [x] **Edit menu items are greyed out** — Removed the Edit submenu entirely; clipboard works via the JS shim (Cmd+X/C/V/A/Z handled in App.vue and SqlEditor.vue), so the menu added no value and all items appeared disabled.
 
@@ -193,13 +200,13 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [x] **S3 bucket connection** — S3/R2/MinIO as a connection type in the Sidebar. Per-connection credentials (bucket, key, secret, region, endpoint) stored as JSON in the DSN field. On connect: httpfs secret created with bucket SCOPE so multiple S3 connections coexist. File browser lists all .parquet/.csv/.json/.jsonl/.ndjson files; clicking opens a QueryNode with `read_parquet/read_csv_auto/read_json_auto`. Refresh button re-lists. DisconnectSaved drops the secret.
 
 ### Charts
-- [ ] **More chart types** — Scatter matrix, waterfall, heatmap (histogram/boxplot/sankey done).
+- [x] **More chart types** — Waterfall, heatmap, scatter-matrix added (all 14 types done: barY/barX/lineY/areaY/dot/cell/pie/donut/histogram/boxplot/sankey/waterfall/heatmap/scatter-matrix + number/boolean/conditional/mermaid/table display types).
 
 ### MCP Expansions
 - [x] **`import_s3` MCP tool** — Dedicated S3 import tool so agents can load files from `s3://` URIs directly (credentials from stored S3 settings).
 
 ### Canvas Structure
-- [ ] **Canvas tabs** — Multiple named canvases as tabs within the app (Figma documents-style). Data model: `nodes` keyed by `canvasId`; SQLite `canvas_state` gets a `canvas_id` column + migration. Tab strip in toolbar. Significant effort — needs a dedicated planning session before touching persistence layer.
+- [x] **Canvas tabs** — See Canvas Operations above. Done.
 
 ### Discovery & Content
 - [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.

@@ -1,53 +1,57 @@
 import { watch } from 'vue'
 import { useSchemaStore } from '../stores/schema'
-import type { ChartNode, MarkdownNode } from '../stores/schema'
+import type { CanvasNode, ChartNode, MarkdownNode } from '../stores/schema'
 
-const WEB_CANVAS_KEY = 'sql-garden:canvas:v2'
+const WEB_CANVAS_KEY = 'sql-garden:canvas:v3'
 
 export function usePersistenceWeb() {
   const schemaStore = useSchemaStore()
 
+  function serializeNode(node: CanvasNode): Record<string, unknown> {
+    if (node.kind === 'table' || node.kind === 'data') {
+      const { kind, id, name, x, y, color, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, w, h, viewMode }
+    }
+    if (node.kind === 'query') {
+      const { kind, id, name, x, y, color, sql, isView, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, sql, isView, w, h, viewMode }
+    }
+    if (node.kind === 'markdown') {
+      const { kind, id, name, x, y, color, content, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, content, w, h, viewMode }
+    }
+    if (node.kind === 'section') {
+      const { kind, id, name, x, y, color, w, h } = node
+      return { kind, id, name, x, y, color, w, h }
+    }
+    const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn,
+            chartLabel, trueText, falseText, trueColor, falseColor, conditions, mermaidCode, matrixColumns,
+            tableColumnConfigs, w, h, viewMode } = node
+    return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn,
+             chartLabel, trueText, falseText, trueColor, falseColor, conditions, mermaidCode, matrixColumns,
+             tableColumnConfigs, w, h, viewMode }
+  }
+
   function saveCanvas(): void {
-    const payload = schemaStore.nodes.map((node) => {
-      if (node.kind === 'table' || node.kind === 'data') {
-        const { kind, id, name, x, y, color, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, w, h, viewMode }
-      }
-      if (node.kind === 'query') {
-        const { kind, id, name, x, y, color, sql, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, sql, w, h, viewMode }
-      }
-      if (node.kind === 'markdown') {
-        const { kind, id, name, x, y, color, content, w, h, viewMode } = node
-        return { kind, id, name, x, y, color, content, w, h, viewMode }
-      }
-      if (node.kind === 'section') {
-        const { kind, id, name, x, y, color, w, h } = node
-        return { kind, id, name, x, y, color, w, h }
-      }
-      const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode } = node
-      return { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn, w, h, viewMode }
-    })
+    const payload = {
+      version: 2,
+      activeCanvasId: schemaStore.activeCanvasId,
+      canvases: schemaStore.canvases.map(tab => ({
+        id: tab.id,
+        name: tab.name,
+        nodes: tab.nodes.map(serializeNode),
+      })),
+    }
     try {
       localStorage.setItem(WEB_CANVAS_KEY, JSON.stringify(payload))
     } catch { /* storage full or denied — silent */ }
   }
 
-  async function loadAll(): Promise<boolean> {
-    const raw = localStorage.getItem(WEB_CANVAS_KEY)
-    if (!raw) return false
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let saved: any[]
-    try { saved = JSON.parse(raw) } catch { return false }
-    if (!saved.length) return false
-
-    schemaStore.clear()
-
-    for (const entry of saved) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function restoreNodeEntries(entries: any[]) {
+    for (const entry of entries) {
       const kind: string = entry.kind ?? 'table'
-      if (kind === 'table' || kind === 'data') continue  // materialized data is gone after page reload; skip
-
+      if (kind === 'table' || kind === 'data') continue // materialized data is gone after reload
       try {
         if (kind === 'query') {
           schemaStore.addQueryNode({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, sql: entry.sql ?? '', color: entry.color, isView: entry.isView ?? false, w: entry.w, h: entry.h, viewMode: entry.viewMode })
@@ -63,6 +67,10 @@ export function usePersistenceWeb() {
             sourceId: entry.sourceId ?? null, sql: entry.sql ?? '',
             chartType: entry.chartType ?? 'barY', xColumn: entry.xColumn ?? '', yColumn: entry.yColumn ?? '',
             colorColumn: entry.colorColumn, labelColumn: entry.labelColumn,
+            chartLabel: entry.chartLabel, trueText: entry.trueText, falseText: entry.falseText,
+            trueColor: entry.trueColor, falseColor: entry.falseColor, conditions: entry.conditions,
+            mermaidCode: entry.mermaidCode, matrixColumns: entry.matrixColumns,
+            tableColumnConfigs: entry.tableColumnConfigs,
             w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addChartNode(c)
@@ -73,12 +81,41 @@ export function usePersistenceWeb() {
         console.warn(`Failed to restore node "${entry.name ?? entry.id}":`, e)
       }
     }
+  }
 
-    const nonTableCount = saved.filter((e) => (e.kind ?? 'table') !== 'table' && e.kind !== 'data').length
-    if (nonTableCount > 0 || saved.length > 0) {
-      schemaStore.setColorCursor(saved.length)
-      return true
+  async function loadAll(): Promise<boolean> {
+    const raw = localStorage.getItem(WEB_CANVAS_KEY)
+    if (!raw) return false
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let saved: any
+    try { saved = JSON.parse(raw) } catch { return false }
+
+    // v2 multi-canvas format
+    if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.version === 2) {
+      const tabs: Array<{ id: string; name: string; nodes: unknown[] }> = saved.canvases ?? []
+      if (!tabs.length) return false
+      schemaStore.loadCanvases(tabs.map(t => ({ id: t.id, name: t.name })), saved.activeCanvasId ?? tabs[0].id)
+      let total = 0
+      for (const tab of tabs) {
+        schemaStore.switchCanvas(tab.id)
+        const entries = Array.isArray(tab.nodes) ? tab.nodes : []
+        restoreNodeEntries(entries)
+        total += entries.length
+      }
+      schemaStore.switchCanvas(saved.activeCanvasId ?? tabs[0].id)
+      schemaStore.setColorCursor(total)
+      return total > 0
     }
+
+    // Legacy flat-array format
+    if (Array.isArray(saved) && saved.length > 0) {
+      schemaStore.clear()
+      restoreNodeEntries(saved)
+      schemaStore.setColorCursor(saved.length)
+      return saved.length > 0
+    }
+
     return false
   }
 
@@ -89,7 +126,7 @@ export function usePersistenceWeb() {
 
   function startAutoSave(): void {
     watch(
-      schemaStore.nodes,
+      () => schemaStore.canvases,
       () => {
         if (_saveTimer) clearTimeout(_saveTimer)
         _saveTimer = setTimeout(() => { saveCanvas() }, 1000)

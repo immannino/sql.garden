@@ -288,9 +288,63 @@ var mcpToolDefs = []map[string]any{
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
 	},
 	{
-		"name":        "list_canvas_nodes",
-		"description": "List all query nodes currently on the canvas (id + name). Use the returned ids as source_id in add_chart_node.",
+		"name":        "list_canvases",
+		"description": "List all canvas tabs with their id, name, node count, and which is currently active. Call this before using canvas_id in other tools.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+	},
+	{
+		"name":        "create_canvas",
+		"description": "Create a new canvas tab. Returns the canvas id to use as canvas_id in node-adding tools.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Display name for the new canvas tab"},
+			},
+		},
+	},
+	{
+		"name":        "rename_canvas",
+		"description": "Rename an existing canvas tab.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to rename (from list_canvases)"},
+				"name":      map[string]any{"type": "string", "description": "New display name"},
+			},
+			"required": []string{"canvas_id", "name"},
+		},
+	},
+	{
+		"name":        "switch_canvas",
+		"description": "Make a canvas tab active — brings it into view for the user.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to switch to (from list_canvases or create_canvas)"},
+			},
+			"required": []string{"canvas_id"},
+		},
+	},
+	{
+		"name":        "remove_canvas",
+		"description": "Delete a canvas tab and all its nodes. Cannot remove the last remaining canvas.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "ID of the canvas to remove (from list_canvases)"},
+			},
+			"required": []string{"canvas_id"},
+		},
+	},
+	{
+		"name":        "list_canvas_nodes",
+		"description": "List query/data nodes with their id and name. Pass canvas_id to filter to a specific tab; omit to see all canvases. Use returned ids as source_id in add_chart_node.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "Filter to a specific canvas (from list_canvases); omit for all canvases"},
+			},
+		},
 	},
 	{
 		"name":        "run_query",
@@ -305,91 +359,98 @@ var mcpToolDefs = []map[string]any{
 	},
 	{
 		"name":        "add_query_node",
-		"description": "Pin a named SQL query to the user's canvas as an interactive scrollable table. Returns a node id you can pass as source_id to add_chart_node.",
+		"description": "Pin a named SQL query to a canvas as an interactive scrollable table. Returns a node id you can pass as source_id to add_chart_node.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Short label for the node"},
-				"sql":  map[string]any{"type": "string", "description": "SQL to display in the node"},
+				"name":      map[string]any{"type": "string", "description": "Short label for the node"},
+				"sql":       map[string]any{"type": "string", "description": "SQL to display in the node"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"name", "sql"},
 		},
 	},
 	{
 		"name":        "add_chart_node",
-		"description": "Pin a chart visualization to the canvas. Provide either source_id (from add_query_node) OR sql — not both. Always confirm column names via run_query first.",
+		"description": "Pin a chart visualization to a canvas. Provide either source_id (from add_query_node) OR sql — not both. Always confirm column names via run_query first.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name":         map[string]any{"type": "string"},
-				"source_id":    map[string]any{"type": "string", "description": "ID of an existing query node whose data this chart visualises (preferred over sql when node is on canvas)"},
+				"source_id":    map[string]any{"type": "string", "description": "ID of an existing query node whose data this chart visualises"},
 				"sql":          map[string]any{"type": "string", "description": "SQL that produces the chart data — omit when source_id is provided"},
-				"chart_type":   map[string]any{"type": "string", "enum": []string{"barY", "barX", "lineY", "areaY", "dot", "cell", "pie", "donut", "number", "boolean", "conditional"}, "description": "barY/barX=bar, lineY=line, areaY=area, dot=scatter, pie/donut=pie, cell=heatmap, number=big single value, boolean=true/false badge, conditional=N-state badge"},
+				"chart_type":   map[string]any{"type": "string", "enum": []string{"barY", "barX", "lineY", "areaY", "dot", "cell", "pie", "donut", "number", "boolean", "conditional", "waterfall", "heatmap", "scatter-matrix"}, "description": "barY/barX=bar chart, lineY=line, areaY=area, dot=scatter, pie/donut=pie chart, cell=grid heatmap, number=big single value, boolean=true/false badge, conditional=N-state badge, waterfall=running-total waterfall (needs x+y), heatmap=2D density heatmap (needs x+y), scatter-matrix=pairwise scatter grid"},
 				"x_column":     map[string]any{"type": "string", "description": "Column for the x-axis / category"},
 				"y_column":     map[string]any{"type": "string", "description": "Column for the y-axis / value"},
 				"color_column": map[string]any{"type": "string", "description": "Optional column for grouping/color"},
 				"label_column": map[string]any{"type": "string", "description": "Optional column for slice labels (pie/donut)"},
+				"canvas_id":    map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"name", "chart_type", "x_column", "y_column"},
 		},
 	},
 	{
 		"name":        "add_markdown_node",
-		"description": "Pin a markdown note, summary, or documentation block to the canvas.",
+		"description": "Pin a markdown note, summary, or documentation block to a canvas.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":    map[string]any{"type": "string", "description": "Short title for the node"},
-				"content": map[string]any{"type": "string", "description": "Markdown content"},
+				"name":      map[string]any{"type": "string", "description": "Short title for the node"},
+				"content":   map[string]any{"type": "string", "description": "Markdown content"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"name", "content"},
 		},
 	},
 	{
 		"name":        "materialize_query",
-		"description": "Snapshot a SQL query's results into a named DuckDB table and pin it to the canvas as a persistent Data node. Unlike add_query_node (which re-runs SQL on demand), a Data node stores a snapshot that survives app restarts and can be queried directly. Use for expensive aggregations or stable reference datasets.",
+		"description": "Snapshot a SQL query's results into a named DuckDB table and pin it to a canvas as a persistent Data node. Survives app restarts and can be queried directly.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"table_name": map[string]any{"type": "string", "description": "DuckDB table name for the snapshot (snake_case recommended)"},
 				"sql":        map[string]any{"type": "string", "description": "SQL query whose results are materialized — do not include a trailing semicolon"},
-				"source_id":  map[string]any{"type": "string", "description": "Optional ID of a query node this was derived from, used for canvas linking"},
+				"source_id":  map[string]any{"type": "string", "description": "Optional ID of a query node this was derived from"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"table_name", "sql"},
 		},
 	},
 	{
 		"name":        "import_file",
-		"description": "Import a local CSV, Parquet, or JSON file into DuckDB and add it as a table node on the canvas.",
+		"description": "Import a local CSV, Parquet, or JSON file into DuckDB and add it as a table node on a canvas.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":       map[string]any{"type": "string", "description": "Absolute path to the file (CSV, Parquet, JSON, JSONL)"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"path", "table_name"},
 		},
 	},
 	{
 		"name":        "import_csv_data",
-		"description": "Load raw CSV text directly into DuckDB as a table and add it as a canvas node. Use this when you have generated or transformed data as a string — no file on disk needed.",
+		"description": "Load raw CSV text directly into DuckDB as a table and add it as a canvas node. Use when you have generated data as a string — no file on disk needed.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"csv_text":   map[string]any{"type": "string", "description": "Full CSV content including header row"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"csv_text", "table_name"},
 		},
 	},
 	{
 		"name":        "import_url",
-		"description": "Fetch a remote CSV, Parquet, or JSON file by URL, load it into DuckDB, and add it as a canvas node. The download happens server-side so CORS is not a concern.",
+		"description": "Fetch a remote CSV, Parquet, or JSON file by URL, load it into DuckDB, and add it as a canvas node. Download is server-side so CORS is not a concern.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"url":        map[string]any{"type": "string", "description": "Public URL to the data file (CSV, Parquet, JSON, JSONL)"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"url", "table_name"},
 		},
@@ -402,19 +463,20 @@ var mcpToolDefs = []map[string]any{
 			"properties": map[string]any{
 				"s3_url":     map[string]any{"type": "string", "description": "S3 URI to the data file, e.g. s3://my-bucket/data/sales.parquet"},
 				"table_name": map[string]any{"type": "string", "description": "Name to register the table as in DuckDB (snake_case recommended)"},
+				"canvas_id":  map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
 			},
 			"required": []string{"s3_url", "table_name"},
 		},
 	},
 	{
 		"name":        "resize_node",
-		"description": "Set the width and height of an existing canvas node. Use node ids returned by add_query_node, add_chart_node, or list_canvas_nodes.",
+		"description": "Set the width and height of an existing canvas node.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"node_id": map[string]any{"type": "string", "description": "ID of the node to resize"},
 				"width":   map[string]any{"type": "number", "description": "New width in canvas pixels"},
-				"height":  map[string]any{"type": "number", "description": "New height in canvas pixels (for charts this is the plot area height; for queries this is the results pane height)"},
+				"height":  map[string]any{"type": "number", "description": "New height in canvas pixels"},
 			},
 			"required": []string{"node_id", "width", "height"},
 		},
@@ -434,11 +496,11 @@ var mcpToolDefs = []map[string]any{
 	},
 	{
 		"name":        "focus_node",
-		"description": "Pan and zoom the canvas viewport to centre on a specific node. Call after adding nodes to direct the user's attention to the most important result.",
+		"description": "Pan and zoom the canvas viewport to centre on a specific node. Call after adding nodes to direct the user's attention.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"node_id": map[string]any{"type": "string", "description": "ID of the node to focus (from add_query_node, add_chart_node, or list_canvas_nodes)"},
+				"node_id": map[string]any{"type": "string", "description": "ID of the node to focus"},
 			},
 			"required": []string{"node_id"},
 		},
@@ -474,18 +536,22 @@ var mcpToolDefs = []map[string]any{
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":   map[string]any{"type": "string", "description": "Label for the section"},
-				"width":  map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
-				"height": map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+				"name":      map[string]any{"type": "string", "description": "Label for the section"},
+				"width":     map[string]any{"type": "number", "description": "Width in canvas pixels (default 400)"},
+				"height":    map[string]any{"type": "number", "description": "Height in canvas pixels (default 300)"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the section to; default is the active canvas"},
 			},
 			"required": []string{"name"},
 		},
 	},
 	{
 		"name":        "clear_canvas",
-		"description": "Remove all nodes from the canvas. Use before a full rebuild to avoid duplicates.",
+		"description": "Remove all nodes from a canvas tab. Omit canvas_id to clear the active canvas.",
 		"inputSchema": map[string]any{
-			"type": "object", "properties": map[string]any{},
+			"type": "object",
+			"properties": map[string]any{
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to clear; omit for the active canvas"},
+			},
 		},
 	},
 	{

@@ -29,9 +29,10 @@ import (
 // mcpNodeEntry is a lightweight record of a node added via MCP/AI this session,
 // kept in memory so list_canvas_nodes doesn't depend on the frontend auto-save.
 type mcpNodeEntry struct {
-	ID   string
-	Name string
-	Kind string // "query" | "chart" | "markdown" | "table" | "data"
+	ID       string
+	Name     string
+	Kind     string // "query" | "chart" | "markdown" | "table" | "data"
+	CanvasID string // canvas the node belongs to ("" = active canvas at creation time)
 }
 
 // App holds all application state. Every exported method becomes a callable
@@ -42,6 +43,7 @@ type App struct {
 	persist         *PersistenceDB
 	mcpSrv          *mcpServer
 	mcpNodeRegistry sync.Map // id → mcpNodeEntry
+	mcpCanvases     sync.Map // id → name (canvases created via MCP this session)
 }
 
 func NewApp() *App {

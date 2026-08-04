@@ -368,12 +368,37 @@ function labelFor(sec: number): string {
 }
 
 const intervalTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const _nextRefreshAt = ref(0)
+const refreshCountdown = ref(0)
+let _countdownTimer: ReturnType<typeof setInterval> | null = null
+
+function _tickCountdown() {
+  refreshCountdown.value = Math.max(0, Math.ceil((_nextRefreshAt.value - Date.now()) / 1000))
+}
 
 function startTimer() {
   if (intervalTimer.value) { clearInterval(intervalTimer.value); intervalTimer.value = null }
+  if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null }
   const ms = (props.node.refreshInterval ?? 0) * 1000
-  if (ms > 0) intervalTimer.value = setInterval(() => run(), ms)
+  if (ms > 0) {
+    _nextRefreshAt.value = Date.now() + ms
+    _tickCountdown()
+    intervalTimer.value = setInterval(() => {
+      _nextRefreshAt.value = Date.now() + ms
+      run()
+    }, ms)
+    _countdownTimer = setInterval(_tickCountdown, 1000)
+  } else {
+    refreshCountdown.value = 0
+  }
 }
+
+const refreshCountdownLabel = computed(() => {
+  const s = refreshCountdown.value
+  if (s <= 0) return '…'
+  if (s < 60) return `${s}s`
+  return `${Math.ceil(s / 60)}m`
+})
 
 function setRefresh(sec: number) {
   schemaStore.setRefreshInterval(props.node.id, sec)
@@ -384,6 +409,7 @@ watch(() => props.node.refreshInterval, startTimer, { immediate: true })
 
 onUnmounted(() => {
   if (intervalTimer.value) clearInterval(intervalTimer.value)
+  if (_countdownTimer) clearInterval(_countdownTimer)
   if (_historyTimer) clearInterval(_historyTimer)
 })
 </script>
@@ -554,6 +580,9 @@ onUnmounted(() => {
       <span class="footer-status">
         <span v-if="runSummary" class="status-ok">{{ runSummary }}</span>
         <span v-else class="status-hint">⌘↵ to run</span>
+      </span>
+      <span v-if="(node.refreshInterval ?? 0) > 0" class="refresh-countdown" title="Next auto-refresh">
+        ↻ {{ refreshCountdownLabel }}
       </span>
       <select
         class="refresh-select"
@@ -793,6 +822,9 @@ onUnmounted(() => {
           <span class="footer-status">
             <span v-if="runSummary" class="status-ok">{{ runSummary }}</span>
             <span v-else class="status-hint">⌘↵ to run</span>
+          </span>
+          <span v-if="(node.refreshInterval ?? 0) > 0" class="refresh-countdown" title="Next auto-refresh">
+            ↻ {{ refreshCountdownLabel }}
           </span>
           <select
             class="refresh-select"
@@ -1545,6 +1577,16 @@ onUnmounted(() => {
   color: var(--success);
   border-color: rgba(63, 185, 80, 0.4);
   background: rgba(63, 185, 80, 0.08);
+}
+
+.refresh-countdown {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--success);
+  flex-shrink: 0;
+  opacity: 0.8;
+  min-width: 3ch;
+  text-align: right;
 }
 
 /* ── Fullscreen overlay ───────────────────────────────────────────────────── */
