@@ -668,7 +668,7 @@ func (a *App) SaveS3Credentials(creds S3Credentials) error {
 	return a.persist.saveSetting(s3CredentialsKey, string(raw))
 }
 
-const appVersion = "v0.0.3-alpha"
+const appVersion = "v0.0.4-alpha"
 
 // GetAppVersion returns the current application version string.
 func (a *App) GetAppVersion() string { return appVersion }
