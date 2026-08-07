@@ -484,7 +484,7 @@ function onBackdrop(e: MouseEvent) {
   max-height: 560px;
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -618,7 +618,7 @@ function onBackdrop(e: MouseEvent) {
   position: relative;
   width: 32px;
   height: 18px;
-  border-radius: 9px;
+  border-radius: 7px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   flex-shrink: 0;

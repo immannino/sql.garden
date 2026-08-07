@@ -16,6 +16,8 @@
     "@codemirror/lang-sql": "^6.10.0",
     "@duckdb/duckdb-wasm": "^1.29.0",
     "@observablehq/plot": "^0.6.17",
+    "@types/canvas-confetti": "^1.9.0",
+    "canvas-confetti": "^1.9.4",
     "codemirror": "^6.0.2",
     "d3-sankey": "^0.12.3",
     "marked": "^18.0.5",

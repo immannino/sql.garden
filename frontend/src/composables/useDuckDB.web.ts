@@ -1,7 +1,5 @@
 import * as duckdb from '@duckdb/duckdb-wasm'
-import duckdb_mvp_wasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url'
 import duckdb_eh_wasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url'
-import duckdb_mvp_worker_url from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url'
 import duckdb_eh_worker_url from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url'
 import type { Column } from '../stores/schema'
 import type { QueryResult } from './useDuckDB'
@@ -14,11 +12,12 @@ async function ensureDB(): Promise<duckdb.AsyncDuckDB> {
   if (_initPromise) { await _initPromise; return _db! }
 
   _initPromise = (async () => {
-    // crossOriginIsolated requires COOP/COEP headers (not available on GitHub Pages).
-    // MVP is single-threaded but works everywhere; EH is faster but needs isolation.
-    const useEH = !!crossOriginIsolated
-    const workerUrl = useEH ? duckdb_eh_worker_url : duckdb_mvp_worker_url
-    const wasmUrl   = useEH ? duckdb_eh_wasm       : duckdb_mvp_wasm
+    // Always use the EH bundle: it includes Wasm exception handling (_setThrew etc.)
+    // which prevents crashes when DuckDB hits a C++ exception during file parsing.
+    // EH does NOT require cross-origin isolation — that's only needed for multithreading.
+    // MVP bundle omits exception handling and crashes on any DuckDB C++ exception.
+    const workerUrl = duckdb_eh_worker_url
+    const wasmUrl   = duckdb_eh_wasm
     // Use a plain classic Worker (not Vite's ?worker transform) so the pre-bundled
     // DuckDB worker script runs as-is without Vite wrapping it in an ES module.
     const worker = new Worker(workerUrl)

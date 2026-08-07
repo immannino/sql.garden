@@ -169,7 +169,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   max-width: calc(100vw - 40px);
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   display: flex;

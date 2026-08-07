@@ -7,8 +7,11 @@ import ChartCard from './ChartCard.vue'
 import MarkdownCard from './MarkdownCard.vue'
 import SectionCard from './SectionCard.vue'
 import DataCard from './DataCard.vue'
+import IngestCard from './IngestCard.vue'
+import ExerciseCard from './ExerciseCard.vue'
+import TestCard from './TestCard.vue'
 import { useSchemaStore } from '../stores/schema'
-import type { CanvasNode, SectionNode, DataNode, ChartNode } from '../stores/schema'
+import type { CanvasNode, SectionNode, DataNode, ChartNode, IngestNode, ExerciseNode, TestNode } from '../stores/schema'
 import { useSelection } from '../composables/useSelection'
 import { useTableOps } from '../composables/useTableOps'
 import { usePrefs } from '../composables/usePrefs'
@@ -84,6 +87,9 @@ function getNodeCanvasBounds(node: CanvasNode): { x: number; y: number; w: numbe
     case 'query':    return { x: node.x, y: node.y, w: node.w ?? 360, h: (node.h ?? 84) + 130 }
     case 'chart':    return { x: node.x, y: node.y, w: node.w ?? 340, h: (node.h ?? 180) + 200 }
     case 'markdown': return { x: node.x, y: node.y, w: node.w ?? 300, h: (node.h ?? 200) + 34 }
+    case 'ingest':     return { x: node.x, y: node.y, w: node.w ?? 340, h: node.h ?? 200 }
+    case 'exercise': return { x: node.x, y: node.y, w: node.w ?? 720, h: node.h ?? 480 }
+    case 'test':     return { x: node.x, y: node.y, w: node.w ?? 400, h: node.h ?? 320 }
   }
 }
 
@@ -155,7 +161,7 @@ function zoomOut() {
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 1) return
   const target = e.target as HTMLElement
-  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card') || target.closest('.section-card') || target.closest('.data-card')) return
+  if (target.closest('.table-card') || target.closest('.query-card') || target.closest('.chart-card') || target.closest('.markdown-card') || target.closest('.section-card') || target.closest('.data-card') || target.closest('.ingest-card') || target.closest('.exercise-card') || target.closest('.test-card')) return
   e.preventDefault()
 
   // Middle-click or Space+left-click → pan
@@ -467,6 +473,27 @@ onUnmounted(() => {
         <DataCard
           v-else-if="node.kind === 'data'"
           :node="(node as DataNode)"
+          :selected="selectedIds.has(node.id)"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <IngestCard
+          v-else-if="node.kind === 'ingest'"
+          :node="(node as IngestNode)"
+          :selected="selectedIds.has(node.id)"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <ExerciseCard
+          v-else-if="node.kind === 'exercise'"
+          :node="(node as ExerciseNode)"
+          :selected="selectedIds.has(node.id)"
+          @drag-start="onCardDragStart"
+          @resize-start="onCardResizeStart"
+        />
+        <TestCard
+          v-else-if="node.kind === 'test'"
+          :node="(node as TestNode)"
           :selected="selectedIds.has(node.id)"
           @drag-start="onCardDragStart"
           @resize-start="onCardResizeStart"

@@ -744,7 +744,7 @@ function reImport(entry: (typeof historyEntries.value)[number]) {
   display: flex; flex-direction: column;
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }

@@ -136,7 +136,7 @@ function onRenameKey(e: KeyboardEvent) {
 .section-card {
   position: absolute;
   border: 1.5px solid var(--section-color, #6366f1);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--section-color, #6366f1) 5%, transparent);
   cursor: grab;
   user-select: none;

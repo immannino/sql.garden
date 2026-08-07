@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.1-alpha
-> Updated: 2026-08-03 (session 13)
+> Updated: 2026-08-05 (session 14)
 
 ---
 
@@ -195,6 +195,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
+- [ ] **Generator / Ingestion node** — New node type that writes to a DataNode on a schedule. Two modes: (1) **Generator** — pure SQL INSERT using DuckDB functions (`now()`, `random()`, `gen_random_uuid()`) runs on a timer, no network, works offline; good for synthetic live data in the tutorial. (2) **Ingestion** — fetches a URL/API on a schedule, parses response, appends/upserts to a DataNode; dedup UI ("append all / skip duplicates / replace duplicates") compiles to `ON CONFLICT DO NOTHING` or a staging merge. Scheduling: simple intervals first (reuses `refreshInterval` pattern on Go side), full cron expressions (`robfig/cron`) as follow-on. Desktop-first — Go scheduler runs independent of webview so backgrounding isn't an issue. Card shows: last run time, rows added this run, total rows in target, run-now button. Replaces the tabled "data loaders" idea with a safer structured approach. MCP tool (`add_ingest_node`, `set_ingest_schedule`) as follow-on.
 
 ### S3 / Object Storage
 - [x] **S3 bucket connection** — S3/R2/MinIO as a connection type in the Sidebar. Per-connection credentials (bucket, key, secret, region, endpoint) stored as JSON in the DSN field. On connect: httpfs secret created with bucket SCOPE so multiple S3 connections coexist. File browser lists all .parquet/.csv/.json/.jsonl/.ndjson files; clicking opens a QueryNode with `read_parquet/read_csv_auto/read_json_auto`. Refresh button re-lists. DisconnectSaved drops the secret.
@@ -208,9 +209,20 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 ### Canvas Structure
 - [x] **Canvas tabs** — See Canvas Operations above. Done.
 
+### Samples & Learning
+- [x] **Sample picker UX — multi-section layout** — Three-tab modal: Built-in / Learn SQL / Community (coming soon). Level badges, chapter/row counts, tags.
+- [x] **In-app SQL learning track** — "SQL Fundamentals: E-Commerce" — 8 chapters (SELECT → WHERE → ORDER BY → GROUP BY → JOIN → Window Functions → CTEs), 4 tables (100 customers, 40 products, ~499 orders, ~1100 items) generated in DuckDB SQL, no bundled file. Wired into Learn tab in picker.
+- [ ] **Personal finance / bank statement template** — In-app canvas with synthetic transaction data (generated via DuckDB SQL, no external file). Shows the full pipeline: raw import schema → normalization queries → spending by category, income vs expenses, merchant trends. Markdown node explains how to adapt column names to a real export. Lineage arrows make the raw→clean→chart flow visible.
+- [ ] **Data stories (remote, post-launch)** — Remote catalog of interesting public-data canvases (GDP + recession markers, CO₂ trends, etc.). Depends on dataset directory / proxy API infrastructure. Not in-app.
+
+### Template Distribution
+- [ ] **CDN template catalog** — `templates.json` index hosted on the marketing site CDN listing available community/educator packs (name, description, author, tags, URL to `.sql.garden.json`). Sample picker fetches it lazily and renders a "Community" section. One-click import calls existing `import_url` path. Educators host their own pack files anywhere; sql.garden only hosts the index for curated/verified packs.
+- [x] **`sqlgarden://` custom URL scheme** — `protocols` registered in `wails.json` (auto-generates `CFBundleURLTypes` in Info.plist). macOS: `Mac.OnUrlOpen` callback in `main.go` calls `app.handleDeepLink`. Windows: `os.Args[1]` checked on startup. Both parse `sqlgarden://import?pack=<url>` and emit `deep-link:import` Wails event. Web sandbox: reads `?import=<url>` query param on page load. `FetchPackJSON` Go method fetches pack server-side (CORS bypass). Confirmation dialog shown before any import.
+- [x] **Import confirmation dialog** — Inline modal in App.vue (Teleport to body). Shows source URL + "SQL will run" warning, Cancel / Import buttons. On confirm: `FetchPackJSON` → parse → `importNodeBundle`. `ingest` nodes now handled in `importNodeBundle`.
+
 ### Discovery & Content
 - [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.
-- [ ] **Dataset directory + proxy API** — See full design below.
+- [ ] **Dataset directory + proxy API** — See full design below. Post-launch; data stories depend on this.
 - [ ] **Community / Explore page** — Longer-term hub surfacing dataset directory, user-shared canvases, blog posts, and curated data stories. Builds on the dataset directory and news feed foundations.
 
 ### Reporting
@@ -226,6 +238,9 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Web (WASM) parity
 - [ ] **Canvas persistence on web** — State resets on page reload; could use IndexedDB or localStorage.
+
+### Docs
+- [ ] **MCP docs update** — `docs/` VitePress site MCP tools reference is out of date. New tools to document: `resize_node`, `move_node`, `focus_node`, `update_query_node`, `import_csv_data`, `import_url`, `import_s3`, `materialize_query`, `set_node_color`, `add_section`, `list_canvases`, `create_canvas`, `rename_canvas`, `switch_canvas`, `remove_canvas`. All node-adding tools now accept optional `canvas_id`. `list_canvas_nodes` accepts optional `canvas_id` filter. `clear_canvas` is now scoped by `canvas_id`. `add_chart_node` `chart_type` enum extended to 14 types.
 
 ### Website & Distribution
 - [x] **VitePress docs site** — Scaffolded at `docs/`, serves from `/` (root). Custom theme: brand green `#18b569`, MockCanvas hero, light/dark theme support. Content: Introduction, Installation, Quick Start, Nodes (all 15 chart types), Connections, Import, MCP overview/config/tools reference. GitHub badges in hero and footer. "OPEN SOURCE · LOCAL-FIRST" pill above footer.
@@ -318,8 +333,59 @@ Updater job (Go binary, cron via Fly Machines or GitHub Actions schedule)
 
 ---
 
+## 📚 In-App SQL Learning Track — Design
+
+### Goal
+A curated canvas shipped with the binary that gets a user from "I've never written SQL" to "I can answer real business questions" in a single sitting. Not a textbook — every concept answers a concrete question against real (synthetic) data. The canvas format does pedagogical work that a tutorial page can't: query, result, and next step are all visible at once.
+
+### Theme: E-commerce / Sales
+Best fit because:
+- Universally relatable domain — orders, customers, products
+- Schema complexity scales naturally (start with one table, add JOINs later)
+- Every concept maps to a meaningful business question, not abstract syntax
+- Charts emerge naturally at every level (bar for category, line for trends)
+- What most people will use SQL for in their actual jobs
+
+Synthetic data generated entirely via DuckDB SQL (`generate_series`, random functions, `strftime`) — no bundled file, always works, teaches a useful technique.
+
+### Canvas layout
+Linear left-to-right progression with a Markdown "chapter header" node before each concept cluster. Lineage arrows connect source tables → queries → charts throughout.
+
+### Chapters
+
+| # | Concept | Business question answered |
+|---|---------|---------------------------|
+| 0 | Orientation | Data model overview — what tables exist and how they relate |
+| 1 | SELECT basics | What are my most recent 10 orders? |
+| 2 | Filtering (WHERE) | Which orders are over $500? Which customers are in New York? |
+| 3 | Sorting & limiting | Who placed the largest single order? |
+| 4 | Aggregation (GROUP BY) | How much revenue does each product category generate? |
+| 5 | JOIN | Which customers have placed the most orders? (orders JOIN customers) |
+| 6 | Date functions | How has monthly revenue trended over the last year? |
+| 7 | Subqueries / CTEs | What's the average order value per customer, and who's above average? |
+| 8 | Window functions | Running total revenue; rank customers by lifetime value |
+
+Each chapter: 1 Markdown node (question + brief hint), 1–2 QueryNodes with SQL pre-written and results pre-run, 1 ChartNode where a chart is the natural output.
+
+### Philosophy
+- Every query answers a **question**, not "here is GROUP BY"
+- SQL is pre-written and runnable — users see working code immediately, tweak from there
+- Markdown nodes are brief: question, one-line hint, maybe a "try changing X" nudge
+- No hand-holding beyond that — the canvas is a starting point, not a classroom
+- If it ends up used by educators, great — but design for the curious practitioner
+
+### Implementation tasks
+- [ ] **Synthetic data generator** — DuckDB SQL that creates `lrn_customers`, `lrn_products`, `lrn_orders`, `lrn_order_items` with realistic names, dates, amounts (~500 orders, ~200 customers, ~50 products). Seeded random so data is consistent across loads. Data should have real shape: a clear top category, monthly seasonality, a handful of power customers — so charts produce meaningful output.
+- [ ] **Chapter canvas layout** — Design the node positions, section groupings, and markdown content for all 8 chapters.
+- [ ] **Wire into sample picker** — "Learn" section in the picker UI; loads the canvas fresh (clears current state with confirm).
+
+### Educator distribution
+The learning track ships in-app, but the same canvas exported as `.sql.garden.json` can be hosted anywhere and distributed via a `sqlgarden://import?pack=<url>` deep link. An educator can build their own variant, host it on their school LMS or GitHub, and share a single link that opens sql.garden and imports their pack automatically. sql.garden provides the mechanism; educators own the content and hosting.
+
+---
+
 ## 🗑️ Tabled
-- **Data loaders via local scripts** — Observable Framework-style shell-out loaders piping stdout into DuckDB tables. Post-v1, desktop-only via Wails exec.
+- **Data loaders via local scripts** — Observable Framework-style shell-out loaders piping stdout into DuckDB tables. Superseded by the Generator/Ingestion node, which covers the same use cases without the shell security surface.
 - **SSH tunnels** — Post-v1.
 - **Windows code signing** — No cert yet.
 - **Run queries against connections** — Ad-hoc SQL editor per connection; moot because `SELECT * FROM alias.schema.table` already works via DuckDB ATTACH.
