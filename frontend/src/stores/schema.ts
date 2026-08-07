@@ -146,7 +146,99 @@ export interface DataNode {
   columnCasts?: Record<string, { type: string; expr: string }>
 }
 
-export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode | DataNode
+export interface IngestNode {
+  kind: 'ingest'
+  id: string
+  name: string
+  x: number
+  y: number
+  color: string
+  w?: number
+  h?: number
+  viewMode?: ViewMode
+  mode: 'generator' | 'ingestion'
+  sql: string           // generator: DML to run on schedule
+  url: string           // ingestion: URL to fetch
+  targetTable: string   // ingestion: DuckDB table name to write to
+  conflictMode: 'append' | 'replace'
+  interval: number      // seconds; 0 = manual only
+  lastRunAt?: number
+  lastRowsAdded?: number
+}
+
+export type ExerciseCheckKind =
+  | 'set_match'     // result rows == reference SQL rows (order-insensitive)
+  | 'row_count'     // row count satisfies operator + expected
+  | 'non_empty'     // at least 1 row
+  | 'no_nulls'      // no NULLs in specified column
+  | 'column_value'  // aggregate expression on result equals expected value
+  | 'column_exists' // column name present in result
+  | 'sql_pattern'   // student SQL matches / must-not-match a regex
+
+export type CountOperator = '==' | '>=' | '<=' | '>' | '<'
+
+export interface ExerciseCheck {
+  id: string
+  kind: ExerciseCheckKind
+  label: string            // displayed in the check list ("Returns 5 rows")
+  feedbackOnFail: string   // shown when this check fails
+  hint?: string            // optionally revealed after N failures
+  // set_match
+  referenceSql?: string
+  // row_count
+  expectedCount?: number
+  countOperator?: CountOperator
+  // no_nulls / column_exists / column_value
+  column?: string
+  // column_value — SQL expression evaluated as: SELECT <expression> FROM (<studentSql>) t
+  expression?: string
+  expectedValue?: number | string
+  tolerance?: number       // for floating-point comparison
+  // sql_pattern
+  pattern?: string
+  mustMatch?: boolean      // true = must match (default), false = must NOT match
+}
+
+export interface ExerciseNode {
+  kind: 'exercise'
+  id: string
+  name: string
+  x: number
+  y: number
+  color: string
+  w?: number
+  h?: number
+  viewMode?: ViewMode
+  sql: string              // student's starter SQL (edited in-card)
+  prompt: string           // markdown shown to student
+  successText?: string     // shown to student after all checks pass
+  checks: ExerciseCheck[]
+  revealHintsAfter: number // attempts before hints auto-reveal; 0 = never
+  nextId?: string          // ID of next ExerciseNode in the lesson chain
+}
+
+export type TestAssertionMode = 'no_rows' | 'scalar_equals' | 'row_count'
+export type TestOperator = '==' | '>=' | '<=' | '>' | '<'
+
+export interface TestNode {
+  kind: 'test'
+  id: string
+  name: string
+  x: number
+  y: number
+  color: string
+  w?: number
+  h?: number
+  viewMode?: ViewMode
+  sql: string                      // query to run
+  assertionMode: TestAssertionMode // how to evaluate the result
+  expectedValue?: number           // scalar_equals / row_count: the target value
+  operator?: TestOperator          // scalar_equals / row_count: comparison operator (default ==)
+  interval: number                 // seconds between auto-runs; 0 = manual only
+  history: { ts: number; passed: boolean }[]
+}
+
+export type CanvasNode = TableNode | QueryNode | ChartNode | MarkdownNode | SectionNode | DataNode | IngestNode | ExerciseNode | TestNode
 
 export interface CanvasTab {
   id: string
@@ -304,6 +396,39 @@ export const useSchemaStore = defineStore('schema', () => {
     if (nodes.value.some((n) => n.id === node.id)) return
     snapshot()
     nodes.value.push({ kind: 'data', ...node, color: nextColor(node.color) })
+  }
+
+  function addIngestNode(node: Omit<IngestNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
+    nodes.value.push({ kind: 'ingest', ...node, color: nextColor(node.color) })
+  }
+
+  function addExerciseNode(node: Omit<ExerciseNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
+    nodes.value.push({ kind: 'exercise', ...node, color: nextColor(node.color) })
+  }
+
+  function updateExerciseNode(id: string, updates: Partial<Pick<ExerciseNode, 'prompt' | 'checks' | 'sql' | 'revealHintsAfter' | 'name' | 'successText' | 'nextId'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'exercise') Object.assign(n, updates)
+  }
+
+  function addTestNode(node: Omit<TestNode, 'kind' | 'color'> & { color?: string }) {
+    if (nodes.value.some((n) => n.id === node.id)) return
+    snapshot()
+    nodes.value.push({ kind: 'test', ...node, color: nextColor(node.color) })
+  }
+
+  function updateTestNode(id: string, updates: Partial<Pick<TestNode, 'sql' | 'assertionMode' | 'expectedValue' | 'operator' | 'interval' | 'name' | 'history'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'test') Object.assign(n, updates)
+  }
+
+  function updateIngestNode(id: string, updates: Partial<Pick<IngestNode, 'sql' | 'url' | 'targetTable' | 'conflictMode' | 'interval' | 'mode' | 'lastRunAt' | 'lastRowsAdded' | 'name'>>) {
+    const n = nodes.value.find((n) => n.id === id)
+    if (n?.kind === 'ingest') Object.assign(n, updates)
   }
 
   function updateDataNode(id: string, updates: Partial<Pick<DataNode, 'columns' | 'rowCount' | 'sourceSql' | 'name' | 'columnCasts'>>) {
@@ -504,7 +629,7 @@ export const useSchemaStore = defineStore('schema', () => {
     nodes,
     canvases, activeCanvasId,
     addCanvas, removeCanvas, renameCanvas, switchCanvas, addNodeToCanvas, saveViewport, getViewport, loadCanvases,
-    addTable, addQueryNode, addChartNode, addMarkdownNode, addSection, addDataNode, updateDataNode, updateTableNode,
+    addTable, addQueryNode, addChartNode, addMarkdownNode, addSection, addDataNode, updateDataNode, updateTableNode, addIngestNode, updateIngestNode, addExerciseNode, updateExerciseNode, addTestNode, updateTestNode,
     updatePosition, updatePositions, updateNodeSize, updateViewMode, removeNode, renameNode,
     moveNodeToIndex, bringToFront, sendToBack,
     setRowCount, updateQuerySql, pushQueryHistory, setQueryIsView, setRefreshInterval, updateChartConfig, updateMarkdownContent,

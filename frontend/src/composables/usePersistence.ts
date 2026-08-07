@@ -1,7 +1,7 @@
 import { watch } from 'vue'
 import { useDuckDB } from './useDuckDB'
 import { useSchemaStore } from '../stores/schema'
-import type { Column, CanvasNode, ChartNode, MarkdownNode, DataNode } from '../stores/schema'
+import type { Column, CanvasNode, ChartNode, MarkdownNode, DataNode, IngestNode, ExerciseNode, TestNode } from '../stores/schema'
 import { IS_DESKTOP } from '../lib/env'
 import { usePersistenceWeb } from './usePersistence.web'
 import {
@@ -80,6 +80,18 @@ function useDesktopPersistence() {
       const { kind, id, name, x, y, color, w, h } = node
       return { kind, id, name, x, y, color, w, h }
     }
+    if (node.kind === 'ingest') {
+      const { kind, id, name, x, y, color, mode, sql, url, targetTable, conflictMode, interval, w, h, viewMode } = node
+      return { kind, id, name, x, y, color, mode, sql, url, targetTable, conflictMode, interval, w, h, viewMode }
+    }
+    if (node.kind === 'exercise') {
+      const { kind, id, name, x, y, color, sql, prompt, successText, checks, revealHintsAfter, nextId, w, h } = node
+      return { kind, id, name, x, y, color, sql, prompt, successText, checks, revealHintsAfter, nextId, w, h }
+    }
+    if (node.kind === 'test') {
+      const { kind, id, name, x, y, color, sql, assertionMode, expectedValue, operator, interval, w, h } = node
+      return { kind, id, name, x, y, color, sql, assertionMode, expectedValue, operator, interval, w, h }
+    }
     // chart — include all config fields
     const { kind, id, name, x, y, color, sourceId, sql, chartType, xColumn, yColumn, colorColumn, labelColumn,
             chartLabel, trueText, falseText, trueColor, falseColor, conditions, mermaidCode, matrixColumns,
@@ -151,6 +163,32 @@ function useDesktopPersistence() {
             w: entry.w, h: entry.h, viewMode: entry.viewMode,
           }
           schemaStore.addChartNode(c)
+        } else if (kind === 'ingest') {
+          schemaStore.addIngestNode({
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color ?? '#6366f1',
+            mode: entry.mode ?? 'generator', sql: entry.sql ?? '', url: entry.url ?? '',
+            targetTable: entry.targetTable ?? '', conflictMode: entry.conflictMode ?? 'append',
+            interval: entry.interval ?? 0, w: entry.w, h: entry.h, viewMode: entry.viewMode,
+          } as Omit<IngestNode, 'kind' | 'color'> & { color?: string })
+        } else if (kind === 'exercise' || kind === 'assertion') {
+          schemaStore.addExerciseNode({
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color ?? '#f59e0b',
+            sql: entry.sql ?? '', prompt: entry.prompt ?? '', successText: entry.successText ?? '',
+            checks: entry.checks ?? [], revealHintsAfter: entry.revealHintsAfter ?? 0,
+            nextId: entry.nextId ?? undefined,
+            w: entry.w, h: entry.h,
+          } as Omit<ExerciseNode, 'kind' | 'color'> & { color?: string })
+        } else if (kind === 'test') {
+          schemaStore.addTestNode({
+            id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color ?? '#6366f1',
+            sql: entry.sql ?? '',
+            assertionMode: entry.assertionMode ?? 'no_rows',
+            expectedValue: entry.expectedValue,
+            operator: entry.operator,
+            interval: entry.interval ?? 0,
+            history: [],
+            w: entry.w, h: entry.h,
+          } as Omit<TestNode, 'kind' | 'color'> & { color?: string })
         } else if (kind === 'section') {
           schemaStore.addSection({ id: entry.id, name: entry.name, x: entry.x, y: entry.y, color: entry.color, w: entry.w ?? 400, h: entry.h ?? 300 })
         } else if (kind === 'data') {

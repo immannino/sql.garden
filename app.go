@@ -77,8 +77,65 @@ func (a *App) startup(ctx context.Context) {
 
 	go a.startMCPServer()
 
+	// Windows cold launch: URL scheme passes the URL as os.Args[1].
+	// macOS uses Apple Events (OnUrlOpen in mac.Options) which fire after startup.
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "sqlgarden://") {
+			arg := arg
+			go func() {
+				// Small delay so the frontend is ready to receive events.
+				time.Sleep(600 * time.Millisecond)
+				a.handleDeepLink(arg)
+			}()
+			break
+		}
+	}
+
 	runtime.MenuSetApplicationMenu(ctx, a.buildMenu())
 	runtime.MenuUpdateApplicationMenu(ctx)
+}
+
+// handleDeepLink is called by the macOS OnUrlOpen callback and the Windows
+// cold-launch argv check. It parses sqlgarden://import?pack=<url> and emits
+// a "deep-link:import" Wails event that the frontend listens for.
+func (a *App) handleDeepLink(rawURL string) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "sqlgarden" {
+		return
+	}
+	if u.Host == "import" {
+		packURL := u.Query().Get("pack")
+		if packURL != "" {
+			runtime.EventsEmit(a.ctx, "deep-link:import", packURL)
+		}
+	}
+}
+
+// FetchPackJSON downloads a .sql.garden.json pack from the given URL server-side
+// (bypassing any CORS restrictions in the webview) and returns the raw JSON string.
+func (a *App) FetchPackJSON(packURL string) (string, error) {
+	req, err := http.NewRequestWithContext(a.ctx, http.MethodGet, packURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	req.Header.Set("User-Agent", "sql.garden/1.0")
+	req.Header.Set("Accept", "application/json, */*")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50 MB cap
+	if err != nil {
+		return "", fmt.Errorf("read failed: %w", err)
+	}
+	return string(body), nil
 }
 
 func (a *App) emit(event string) func(*menu.CallbackData) {
@@ -107,6 +164,8 @@ func (a *App) buildMenu() *menu.Menu {
 	view.AddSeparator()
 	view.AddText("Toggle Layers", keys.Combo("l", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-layers"))
 	view.AddText("Toggle Query Panel", keys.Combo("p", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-query"))
+	view.AddText("Toggle Exercises Panel", keys.Combo("e", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-exercises"))
+	view.AddText("Toggle Tests Panel", keys.Combo("t", keys.CmdOrCtrlKey, keys.ShiftKey), a.emit("menu:toggle-tests"))
 
 	// ── Help ──────────────────────────────────────────────────────────────────
 	help := m.AddSubmenu("Help")
@@ -1236,6 +1295,86 @@ func (a *App) ImportFromUrl(rawURL, tableName string) error {
 		))
 	}
 	return err
+}
+
+// IngestFromUrl fetches a URL and appends or replaces a target DuckDB table.
+// conflictMode: "append" inserts new rows, "replace" recreates the table.
+func (a *App) IngestFromUrl(rawURL, tableName, conflictMode string) (int64, error) {
+	req, err := http.NewRequestWithContext(a.ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("building request: %w", err)
+	}
+	req.Header.Set("User-Agent", "sql.garden/1.0")
+	req.Header.Set("Accept", "text/csv,application/octet-stream,application/json,*/*")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("fetching URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	urlPath := rawURL
+	if i := strings.IndexAny(rawURL, "?#"); i >= 0 {
+		urlPath = rawURL[:i]
+	}
+	ext := strings.ToLower(filepath.Ext(urlPath))
+	if ext == "" || ext == "." {
+		switch {
+		case strings.Contains(ct, "parquet"):
+			ext = ".parquet"
+		case strings.Contains(ct, "json"):
+			ext = ".json"
+		default:
+			ext = ".csv"
+		}
+	}
+
+	tmp, err := os.CreateTemp("", "sqgarden_ingest_*"+ext)
+	if err != nil {
+		return 0, fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		return 0, fmt.Errorf("downloading: %w", err)
+	}
+	tmp.Close()
+
+	readFn := readFnForPath(tmpPath, tmpPath)
+	safeTable := escapeDoubleQuote(tableName)
+
+	// Check if the target table already exists.
+	var exists int
+	_ = a.duck.QueryRowContext(a.ctx,
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?`, tableName,
+	).Scan(&exists)
+
+	var rowsAdded int64
+	if conflictMode == "replace" || exists == 0 {
+		if _, err = a.duck.ExecContext(a.ctx, fmt.Sprintf(
+			`CREATE OR REPLACE TABLE "%s" AS SELECT * FROM %s`, safeTable, readFn,
+		)); err != nil {
+			return 0, err
+		}
+		_ = a.duck.QueryRowContext(a.ctx, fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, safeTable)).Scan(&rowsAdded)
+	} else {
+		// Append mode: insert rows from the fetched file into the existing table.
+		res, err := a.duck.ExecContext(a.ctx, fmt.Sprintf(
+			`INSERT INTO "%s" SELECT * FROM %s`, safeTable, readFn,
+		))
+		if err != nil {
+			return 0, err
+		}
+		rowsAdded, _ = res.RowsAffected()
+	}
+	return rowsAdded, nil
 }
 
 // importFromS3 imports a file from an S3-compatible store using DuckDB's httpfs extension.

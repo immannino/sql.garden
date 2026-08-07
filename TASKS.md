@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.1-alpha
-> Updated: 2026-08-03 (session 13)
+> Updated: 2026-08-05 (session 14)
 
 ---
 
@@ -195,6 +195,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
+- [ ] **Generator / Ingestion node** — New node type that writes to a DataNode on a schedule. Two modes: (1) **Generator** — pure SQL INSERT using DuckDB functions (`now()`, `random()`, `gen_random_uuid()`) runs on a timer, no network, works offline; good for synthetic live data in the tutorial. (2) **Ingestion** — fetches a URL/API on a schedule, parses response, appends/upserts to a DataNode; dedup UI ("append all / skip duplicates / replace duplicates") compiles to `ON CONFLICT DO NOTHING` or a staging merge. Scheduling: simple intervals first (reuses `refreshInterval` pattern on Go side), full cron expressions (`robfig/cron`) as follow-on. Desktop-first — Go scheduler runs independent of webview so backgrounding isn't an issue. Card shows: last run time, rows added this run, total rows in target, run-now button. Replaces the tabled "data loaders" idea with a safer structured approach. MCP tool (`add_ingest_node`, `set_ingest_schedule`) as follow-on.
 
 ### S3 / Object Storage
 - [x] **S3 bucket connection** — S3/R2/MinIO as a connection type in the Sidebar. Per-connection credentials (bucket, key, secret, region, endpoint) stored as JSON in the DSN field. On connect: httpfs secret created with bucket SCOPE so multiple S3 connections coexist. File browser lists all .parquet/.csv/.json/.jsonl/.ndjson files; clicking opens a QueryNode with `read_parquet/read_csv_auto/read_json_auto`. Refresh button re-lists. DisconnectSaved drops the secret.
@@ -209,15 +210,15 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [x] **Canvas tabs** — See Canvas Operations above. Done.
 
 ### Samples & Learning
-- [ ] **Sample picker UX — multi-section layout** — Split current flat sample list into "Built-in" (shipped with binary), "Learn" (SQL learning track), and eventually "Community" (remote CDN catalog). Small but necessary before adding new samples.
-- [ ] **In-app SQL learning track** — A curated canvas shipped with the binary. See design notes below.
+- [x] **Sample picker UX — multi-section layout** — Three-tab modal: Built-in / Learn SQL / Community (coming soon). Level badges, chapter/row counts, tags.
+- [x] **In-app SQL learning track** — "SQL Fundamentals: E-Commerce" — 8 chapters (SELECT → WHERE → ORDER BY → GROUP BY → JOIN → Window Functions → CTEs), 4 tables (100 customers, 40 products, ~499 orders, ~1100 items) generated in DuckDB SQL, no bundled file. Wired into Learn tab in picker.
 - [ ] **Personal finance / bank statement template** — In-app canvas with synthetic transaction data (generated via DuckDB SQL, no external file). Shows the full pipeline: raw import schema → normalization queries → spending by category, income vs expenses, merchant trends. Markdown node explains how to adapt column names to a real export. Lineage arrows make the raw→clean→chart flow visible.
 - [ ] **Data stories (remote, post-launch)** — Remote catalog of interesting public-data canvases (GDP + recession markers, CO₂ trends, etc.). Depends on dataset directory / proxy API infrastructure. Not in-app.
 
 ### Template Distribution
 - [ ] **CDN template catalog** — `templates.json` index hosted on the marketing site CDN listing available community/educator packs (name, description, author, tags, URL to `.sql.garden.json`). Sample picker fetches it lazily and renders a "Community" section. One-click import calls existing `import_url` path. Educators host their own pack files anywhere; sql.garden only hosts the index for curated/verified packs.
-- [ ] **`sqlgarden://` custom URL scheme** — Register deep-link URL scheme (`sqlgarden://import?pack=<url>`) in `Info.plist` (macOS `CFBundleURLTypes`) and Windows registry. Two handlers needed: app already running (SSE/event from OS) and launched via URL (parse from argv). Imports the pack at the given URL after a confirmation dialog (show pack source URL + node count + SQL-will-run warning). Web sandbox handled separately via `sql.garden/sandbox?import=<url>` query param on load.
-- [ ] **Import confirmation dialog** — Required before any URL-triggered import (deep link or sandbox query param). Shows: source URL, node count, "SQL in this pack will be available to run" notice. User must click Import to proceed. Mirrors VS Code's "Are you sure?" flow for extension installs from URL.
+- [x] **`sqlgarden://` custom URL scheme** — `protocols` registered in `wails.json` (auto-generates `CFBundleURLTypes` in Info.plist). macOS: `Mac.OnUrlOpen` callback in `main.go` calls `app.handleDeepLink`. Windows: `os.Args[1]` checked on startup. Both parse `sqlgarden://import?pack=<url>` and emit `deep-link:import` Wails event. Web sandbox: reads `?import=<url>` query param on page load. `FetchPackJSON` Go method fetches pack server-side (CORS bypass). Confirmation dialog shown before any import.
+- [x] **Import confirmation dialog** — Inline modal in App.vue (Teleport to body). Shows source URL + "SQL will run" warning, Cancel / Import buttons. On confirm: `FetchPackJSON` → parse → `importNodeBundle`. `ingest` nodes now handled in `importNodeBundle`.
 
 ### Discovery & Content
 - [x] **In-app changelog/news feed** — "What's New" tab in Settings modal; fetches GitHub releases API (`/repos/immannino/sql.garden/releases`); displays tag, date, and release body for last 10 releases; lazy-loads on tab open.
@@ -237,6 +238,9 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Web (WASM) parity
 - [ ] **Canvas persistence on web** — State resets on page reload; could use IndexedDB or localStorage.
+
+### Docs
+- [ ] **MCP docs update** — `docs/` VitePress site MCP tools reference is out of date. New tools to document: `resize_node`, `move_node`, `focus_node`, `update_query_node`, `import_csv_data`, `import_url`, `import_s3`, `materialize_query`, `set_node_color`, `add_section`, `list_canvases`, `create_canvas`, `rename_canvas`, `switch_canvas`, `remove_canvas`. All node-adding tools now accept optional `canvas_id`. `list_canvas_nodes` accepts optional `canvas_id` filter. `clear_canvas` is now scoped by `canvas_id`. `add_chart_node` `chart_type` enum extended to 14 types.
 
 ### Website & Distribution
 - [x] **VitePress docs site** — Scaffolded at `docs/`, serves from `/` (root). Custom theme: brand green `#18b569`, MockCanvas hero, light/dark theme support. Content: Introduction, Installation, Quick Start, Nodes (all 15 chart types), Connections, Import, MCP overview/config/tools reference. GitHub badges in hero and footer. "OPEN SOURCE · LOCAL-FIRST" pill above footer.
@@ -381,7 +385,7 @@ The learning track ships in-app, but the same canvas exported as `.sql.garden.js
 ---
 
 ## 🗑️ Tabled
-- **Data loaders via local scripts** — Observable Framework-style shell-out loaders piping stdout into DuckDB tables. Post-v1, desktop-only via Wails exec.
+- **Data loaders via local scripts** — Observable Framework-style shell-out loaders piping stdout into DuckDB tables. Superseded by the Generator/Ingestion node, which covers the same use cases without the shell security surface.
 - **SSH tunnels** — Post-v1.
 - **Windows code signing** — No cert yet.
 - **Run queries against connections** — Ad-hoc SQL editor per connection; moot because `SELECT * FROM alias.schema.table` already works via DuckDB ATTACH.

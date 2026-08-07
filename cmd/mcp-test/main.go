@@ -55,21 +55,28 @@ const (
 // ── Canvas-action SSE buffer ──────────────────────────────────────────────────
 
 type canvasAction struct {
-	Type      string  `json:"type"`
-	NodeID    string  `json:"nodeId"`
-	CanvasID  string  `json:"canvasId"`
-	Name      string  `json:"name"`
-	SQL       string  `json:"sql"`
-	Content   string  `json:"content"`
-	SourceID  string  `json:"sourceId"`
-	ChartType string  `json:"chartType"`
-	XColumn   string  `json:"xColumn"`
-	YColumn   string  `json:"yColumn"`
-	RowCount  int64   `json:"rowCount"`
-	Width     float64 `json:"width"`
-	Height    float64 `json:"height"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
+	Type         string  `json:"type"`
+	NodeID       string  `json:"nodeId"`
+	CanvasID     string  `json:"canvasId"`
+	Name         string  `json:"name"`
+	SQL          string  `json:"sql"`
+	Content      string  `json:"content"`
+	SourceID     string  `json:"sourceId"`
+	ChartType    string  `json:"chartType"`
+	XColumn      string  `json:"xColumn"`
+	YColumn      string  `json:"yColumn"`
+	RowCount     int64   `json:"rowCount"`
+	Width        float64 `json:"width"`
+	Height       float64 `json:"height"`
+	X            float64 `json:"x"`
+	Y            float64 `json:"y"`
+	Mode         string  `json:"mode"`
+	URL          string  `json:"url"`
+	TargetTable  string  `json:"targetTable"`
+	ConflictMode string  `json:"conflictMode"`
+	Interval     float64 `json:"interval"`
+	SuccessText  string  `json:"successText"`
+	NextID       string  `json:"nextId"`
 }
 
 type actionBuffer struct {
@@ -301,7 +308,8 @@ func (r *runner) runAll() {
 			"import_file", "import_csv_data", "import_url", "import_s3",
 			"resize_node", "move_node",
 			"focus_node", "update_query_node",
-			"set_node_color", "add_section",
+			"set_node_color", "add_section", "add_ingest_node",
+			"add_exercise_node", "add_test_node",
 			"clear_canvas", "fit_view",
 		}
 		nameSet := make(map[string]bool, len(names))
@@ -1470,6 +1478,95 @@ func (r *runner) runAll() {
 		return nil
 	})
 
+	// ── add_ingest_node ────────────────────────────────────────────────────────
+
+	r.run("add_ingest_node: generator mode emits ingest action", func() error {
+		resp, actions, err := r.call("add_ingest_node", map[string]any{
+			"name": "tick_generator",
+			"mode": "generator",
+			"sql":  "INSERT INTO ticks VALUES (now(), random())",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("add_ingest_node returned error: %q", resp)
+		}
+		if len(actions) == 0 {
+			return fmt.Errorf("expected canvas action, got none")
+		}
+		a := actions[0]
+		if a.Type != "ingest" {
+			return fmt.Errorf("expected type=ingest, got %q", a.Type)
+		}
+		if a.Name != "tick_generator" {
+			return fmt.Errorf("expected name=tick_generator, got %q", a.Name)
+		}
+		if a.Mode != "generator" {
+			return fmt.Errorf("expected mode=generator, got %q", a.Mode)
+		}
+		return nil
+	})
+
+	r.run("add_ingest_node: ingestion mode emits ingest action with url fields", func() error {
+		resp, actions, err := r.call("add_ingest_node", map[string]any{
+			"name":          "prices_feed",
+			"mode":          "ingestion",
+			"url":           "https://example.com/prices.csv",
+			"target_table":  "prices",
+			"conflict_mode": "replace",
+			"interval":      60.0,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("add_ingest_node returned error: %q", resp)
+		}
+		if len(actions) == 0 {
+			return fmt.Errorf("expected canvas action, got none")
+		}
+		a := actions[0]
+		if a.URL != "https://example.com/prices.csv" {
+			return fmt.Errorf("expected url=https://example.com/prices.csv, got %q", a.URL)
+		}
+		if a.TargetTable != "prices" {
+			return fmt.Errorf("expected target_table=prices, got %q", a.TargetTable)
+		}
+		if a.ConflictMode != "replace" {
+			return fmt.Errorf("expected conflict_mode=replace, got %q", a.ConflictMode)
+		}
+		if a.Interval != 60.0 {
+			return fmt.Errorf("expected interval=60, got %g", a.Interval)
+		}
+		return nil
+	})
+
+	r.run("add_ingest_node: ingestion mode without url returns error", func() error {
+		resp, _, err := r.call("add_ingest_node", map[string]any{
+			"name": "bad_ingest",
+			"mode": "ingestion",
+		})
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for ingestion without url, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("add_ingest_node: missing name returns error", func() error {
+		resp, _, err := r.call("add_ingest_node", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(resp), "error") {
+			return fmt.Errorf("expected error for missing name, got: %q", resp)
+		}
+		return nil
+	})
+
 	// ── Canvas tabs ───────────────────────────────────────────────────────────
 
 	r.run("list_canvases: returns at least one canvas with [active] marker", func() error {
@@ -1851,6 +1948,172 @@ func (r *runner) runAll() {
 		}
 		if act.CanvasID != "" {
 			return fmt.Errorf("want empty canvasId for active-canvas clear, got %q", act.CanvasID)
+		}
+		return nil
+	})
+
+	// ── add_exercise_node ─────────────────────────────────────────────────────
+
+	r.run("add_exercise_node: emits canvas action with name and prompt", func() error {
+		resp, actions, err := r.call("add_exercise_node", map[string]any{
+			"name":   "ex1_select_basics",
+			"prompt": "Write a SELECT query that returns all rows from `products`.",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(resp, "error") {
+			return fmt.Errorf("add_exercise_node returned error: %q", resp)
+		}
+		a := findAction(actions, "exercise")
+		if a == nil {
+			return fmt.Errorf("no 'exercise' action in response; actions: %v", actions)
+		}
+		if a.Name != "ex1_select_basics" {
+			return fmt.Errorf("want name=ex1_select_basics, got %q", a.Name)
+		}
+		if a.Content != "Write a SELECT query that returns all rows from `products`." {
+			return fmt.Errorf("prompt not round-tripped: %q", a.Content)
+		}
+		return nil
+	})
+
+	r.run("add_exercise_node: sql propagates to action", func() error {
+		starterSQL := "SELECT ??? FROM sb_movies"
+		resp, actions, err := r.call("add_exercise_node", map[string]any{
+			"name":   "ex2_with_sql",
+			"sql":    starterSQL,
+			"prompt": "Select all movies.",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(resp, "error") {
+			return fmt.Errorf("add_exercise_node returned error: %q", resp)
+		}
+		a := findAction(actions, "exercise")
+		if a == nil {
+			return fmt.Errorf("no 'exercise' action found")
+		}
+		if a.SQL != starterSQL {
+			return fmt.Errorf("want sql=%q, got %q", starterSQL, a.SQL)
+		}
+		return nil
+	})
+
+	r.run("add_exercise_node: missing name returns error", func() error {
+		resp, _, err := r.call("add_exercise_node", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp, "error") {
+			return fmt.Errorf("expected error for missing name, got: %q", resp)
+		}
+		return nil
+	})
+
+	r.run("add_exercise_node: canvas_id propagates to action", func() error {
+		resp, _, err := r.call("create_canvas", map[string]any{"name": "Assertion Test Canvas"})
+		if err != nil {
+			return err
+		}
+		cid := extractCanvasID(resp)
+		if cid == "" {
+			return fmt.Errorf("could not extract canvas id from: %q", resp)
+		}
+		_, actions, err := r.call("add_exercise_node", map[string]any{
+			"name":      "ex3_canvas_target",
+			"canvas_id": cid,
+		})
+		if err != nil {
+			return err
+		}
+		a := findAction(actions, "exercise")
+		if a == nil {
+			return fmt.Errorf("no 'exercise' action found")
+		}
+		if a.CanvasID != cid {
+			return fmt.Errorf("want canvasId=%q, got %q", cid, a.CanvasID)
+		}
+		return nil
+	})
+
+	r.run("add_exercise_node: success_text propagates to action", func() error {
+		txt := "Great work! **SELECT *** retrieves every column."
+		resp, actions, err := r.call("add_exercise_node", map[string]any{
+			"name":         "ex_success_text",
+			"success_text": txt,
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(resp, "error") {
+			return fmt.Errorf("add_exercise_node returned error: %q", resp)
+		}
+		a := findAction(actions, "exercise")
+		if a == nil {
+			return fmt.Errorf("no 'exercise' action found")
+		}
+		if a.SuccessText != txt {
+			return fmt.Errorf("want successText=%q, got %q", txt, a.SuccessText)
+		}
+		return nil
+	})
+
+	r.run("add_exercise_node: next_id propagates to action", func() error {
+		resp, actions, err := r.call("add_exercise_node", map[string]any{
+			"name":    "ex_with_next",
+			"next_id": "mcp_ex_next_lesson",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(resp, "error") {
+			return fmt.Errorf("add_exercise_node returned error: %q", resp)
+		}
+		a := findAction(actions, "exercise")
+		if a == nil {
+			return fmt.Errorf("no 'exercise' action found")
+		}
+		if a.NextID != "mcp_ex_next_lesson" {
+			return fmt.Errorf("want nextId=%q, got %q", "mcp_ex_next_lesson", a.NextID)
+		}
+		return nil
+	})
+
+	// ── add_test_node ─────────────────────────────────────────────────────────
+
+	r.run("add_test_node: emits canvas action with name and sql", func() error {
+		resp, actions, err := r.call("add_test_node", map[string]any{
+			"name": "test_row_count",
+			"sql":  "SELECT COUNT(*) AS n FROM products",
+		})
+		if err != nil {
+			return err
+		}
+		if strings.Contains(resp, "error") {
+			return fmt.Errorf("add_test_node returned error: %q", resp)
+		}
+		a := findAction(actions, "test")
+		if a == nil {
+			return fmt.Errorf("no 'test' action in response; actions: %v", actions)
+		}
+		if a.Name != "test_row_count" {
+			return fmt.Errorf("want name=test_row_count, got %q", a.Name)
+		}
+		if a.SQL != "SELECT COUNT(*) AS n FROM products" {
+			return fmt.Errorf("sql not round-tripped: %q", a.SQL)
+		}
+		return nil
+	})
+
+	r.run("add_test_node: missing name returns error", func() error {
+		resp, _, err := r.call("add_test_node", nil)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(resp, "error") {
+			return fmt.Errorf("expected error for missing name, got: %q", resp)
 		}
 		return nil
 	})

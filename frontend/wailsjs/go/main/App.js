@@ -58,6 +58,10 @@ export function Exec(arg1) {
   return window['go']['main']['App']['Exec'](arg1);
 }
 
+export function FetchPackJSON(arg1) {
+  return window['go']['main']['App']['FetchPackJSON'](arg1);
+}
+
 export function GetAISettings() {
   return window['go']['main']['App']['GetAISettings']();
 }
@@ -130,12 +134,20 @@ export function ImportTableFromJSON(arg1, arg2) {
   return window['go']['main']['App']['ImportTableFromJSON'](arg1, arg2);
 }
 
+export function IngestFromUrl(arg1, arg2, arg3) {
+  return window['go']['main']['App']['IngestFromUrl'](arg1, arg2, arg3);
+}
+
 export function ListAttachedDatabases() {
   return window['go']['main']['App']['ListAttachedDatabases']();
 }
 
 export function ListConnections() {
   return window['go']['main']['App']['ListConnections']();
+}
+
+export function ListLearnTracks() {
+  return window['go']['main']['App']['ListLearnTracks']();
 }
 
 export function ListS3Objects(arg1) {
@@ -152,6 +164,10 @@ export function LoadCanvasState() {
 
 export function LoadExtension(arg1) {
   return window['go']['main']['App']['LoadExtension'](arg1);
+}
+
+export function LoadLearnTrack(arg1) {
+  return window['go']['main']['App']['LoadLearnTrack'](arg1);
 }
 
 export function LoadSampleDataset(arg1) {

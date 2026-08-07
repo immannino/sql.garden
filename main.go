@@ -36,6 +36,7 @@ func main() {
 			TitleBar:             mac.TitleBarHiddenInset(),
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
+			OnUrlOpen:            app.handleDeepLink,
 		},
 		Windows: &windows.Options{},
 		Linux:   &linux.Options{},

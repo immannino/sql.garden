@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 
 interface Tab { id: string; name: string }
 
@@ -9,10 +9,11 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  switch: [id: string]
-  add:    []
-  remove: [id: string]
-  rename: [id: string, name: string]
+  switch:  [id: string]
+  add:     []
+  remove:  [id: string]
+  rename:  [id: string, name: string]
+  export:  [id: string]
 }>()
 
 const renamingId  = ref<string | null>(null)
@@ -39,6 +40,34 @@ function onRenameKey(e: KeyboardEvent) {
   if (e.key === 'Enter')  { e.preventDefault(); commitRename() }
   if (e.key === 'Escape') { renamingId.value = null }
 }
+
+// ── Tab context menu ─────────────────────────────────────────────────────────
+const ctxMenu = ref<{ id: string; x: number; y: number } | null>(null)
+
+function showContextMenu(tab: Tab, e: MouseEvent) {
+  ctxMenu.value = { id: tab.id, x: e.clientX, y: e.clientY }
+}
+
+function closeCtxMenu() { ctxMenu.value = null }
+
+function ctxRename() {
+  const tab = props.canvases.find(c => c.id === ctxMenu.value?.id)
+  closeCtxMenu()
+  if (tab) startRename(tab)
+}
+
+function ctxExport() {
+  if (ctxMenu.value) emit('export', ctxMenu.value.id)
+  closeCtxMenu()
+}
+
+function ctxClose() {
+  if (ctxMenu.value && props.canvases.length > 1) emit('remove', ctxMenu.value.id)
+  closeCtxMenu()
+}
+
+onMounted(() => document.addEventListener('click', closeCtxMenu, true))
+onUnmounted(() => document.removeEventListener('click', closeCtxMenu, true))
 </script>
 
 <template>
@@ -51,6 +80,7 @@ function onRenameKey(e: KeyboardEvent) {
       :title="tab.name"
       @click="renamingId !== tab.id && emit('switch', tab.id)"
       @dblclick.stop="startRename(tab)"
+      @contextmenu.prevent="showContextMenu(tab, $event)"
     >
       <!-- Close button — left side, fades in on hover -->
       <button
@@ -89,6 +119,20 @@ function onRenameKey(e: KeyboardEvent) {
       </svg>
     </button>
   </div>
+
+  <Teleport to="body">
+    <div
+      v-if="ctxMenu"
+      class="tab-ctx-menu"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      @click.stop
+    >
+      <button class="ctx-item" @click="ctxRename">Rename</button>
+      <button class="ctx-item" @click="ctxExport">Export tab as .sql.garden.json</button>
+      <div class="ctx-divider" />
+      <button class="ctx-item" :disabled="canvases.length <= 1" @click="ctxClose">Close tab</button>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -200,4 +244,42 @@ function onRenameKey(e: KeyboardEvent) {
 }
 .tab-add:hover { background: var(--surface-2); color: var(--text-primary); }
 .tab-add svg { width: 10px; height: 10px; }
+
+/* Tab context menu — teleported to body so it's not clipped by the tab bar */
+.tab-ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--surface-2); }
+.ctx-item:disabled { color: var(--text-muted); cursor: default; }
+.ctx-item:disabled:hover { background: none; }
+
+.ctx-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 0;
+}
 </style>

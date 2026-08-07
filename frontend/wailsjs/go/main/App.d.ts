@@ -30,6 +30,8 @@ export function DropView(arg1:string):Promise<void>;
 
 export function Exec(arg1:string):Promise<void>;
 
+export function FetchPackJSON(arg1:string):Promise<string>;
+
 export function GetAISettings():Promise<main.AISettings>;
 
 export function GetAppSettings():Promise<main.AppSettings>;
@@ -66,9 +68,13 @@ export function ImportSqliteFromPath(arg1:string,arg2:string):Promise<Array<stri
 
 export function ImportTableFromJSON(arg1:string,arg2:string):Promise<void>;
 
+export function IngestFromUrl(arg1:string,arg2:string,arg3:string):Promise<number>;
+
 export function ListAttachedDatabases():Promise<main.QueryResult>;
 
 export function ListConnections():Promise<Array<main.ConnectionRecord>>;
+
+export function ListLearnTracks():Promise<Array<main.LearnTrack>>;
 
 export function ListS3Objects(arg1:string):Promise<Array<main.S3Object>>;
 
@@ -77,6 +83,8 @@ export function ListSampleDatasets():Promise<Array<main.SampleDataset>>;
 export function LoadCanvasState():Promise<string>;
 
 export function LoadExtension(arg1:string):Promise<void>;
+
+export function LoadLearnTrack(arg1:string):Promise<Array<main.CanvasAction>>;
 
 export function LoadSampleDataset(arg1:string):Promise<Array<main.CanvasAction>>;
 

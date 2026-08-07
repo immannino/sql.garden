@@ -9,6 +9,13 @@
   "author": {
     "name": "Tony Mannino"
   },
+  "protocols": [
+    {
+      "scheme": "sqlgarden",
+      "description": "SQL Garden pack import",
+      "role": "Viewer"
+    }
+  ],
   "info": {
     "productName": "sql.garden",
     "productVersion": "v0.0.4-alpha",

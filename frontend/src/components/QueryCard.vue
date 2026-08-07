@@ -36,6 +36,8 @@ function toggleFullscreen(e?: MouseEvent) {
 
 function onFullscreenKey(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    // If focus is inside CodeMirror, let it handle ESC first (e.g. dismiss autocomplete)
+    if ((e.target as HTMLElement).closest('.cm-editor')) return
     e.preventDefault()
     e.stopImmediatePropagation()
     isFullscreen.value = false
@@ -1159,6 +1161,7 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
 }
 
 .mini-table tbody td.is-null {
@@ -1175,6 +1178,7 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-style: italic;
   padding: 8px;
+  user-select: text;
 }
 
 .results-error { color: var(--error); font-style: normal; }
@@ -1285,6 +1289,7 @@ onUnmounted(() => {
   gap: 6px;
   flex-shrink: 0;
   background: var(--surface-1);
+  user-select: text;
 }
 
 .view-error-msg button {
@@ -1436,6 +1441,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  user-select: text;
 }
 
 .export-error-msg button {

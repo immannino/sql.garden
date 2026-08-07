@@ -48,6 +48,15 @@ export namespace main {
 	    y?: number;
 	    width?: number;
 	    height?: number;
+	    mode?: string;
+	    url?: string;
+	    targetTable?: string;
+	    conflictMode?: string;
+	    interval?: number;
+	    checks?: any[];
+	    revealHintsAfter?: number;
+	    successText?: string;
+	    nextId?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new CanvasAction(source);
@@ -74,6 +83,15 @@ export namespace main {
 	        this.y = source["y"];
 	        this.width = source["width"];
 	        this.height = source["height"];
+	        this.mode = source["mode"];
+	        this.url = source["url"];
+	        this.targetTable = source["targetTable"];
+	        this.conflictMode = source["conflictMode"];
+	        this.interval = source["interval"];
+	        this.checks = source["checks"];
+	        this.revealHintsAfter = source["revealHintsAfter"];
+	        this.successText = source["successText"];
+	        this.nextId = source["nextId"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -250,6 +268,34 @@ export namespace main {
 	        this.dsn = source["dsn"];
 	        this.readOnly = source["readOnly"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class LearnTrack {
+	    id: string;
+	    name: string;
+	    description: string;
+	    icon: string;
+	    level: string;
+	    chapters: number;
+	    tables: string[];
+	    rowCount: number;
+	    tags: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LearnTrack(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.icon = source["icon"];
+	        this.level = source["level"];
+	        this.chapters = source["chapters"];
+	        this.tables = source["tables"];
+	        this.rowCount = source["rowCount"];
+	        this.tags = source["tags"];
 	    }
 	}
 	export class MCPConfigStatus {

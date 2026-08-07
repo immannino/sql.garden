@@ -127,6 +127,17 @@ type CanvasAction struct {
 	// Explicit size — used by resize_node and move_node tools.
 	Width  float64 `json:"width,omitempty"`
 	Height float64 `json:"height,omitempty"`
+	// IngestNode fields
+	Mode         string  `json:"mode,omitempty"`         // "generator" | "ingestion"
+	URL          string  `json:"url,omitempty"`          // ingestion: source URL
+	TargetTable  string  `json:"targetTable,omitempty"`  // ingestion: DuckDB table name
+	ConflictMode string  `json:"conflictMode,omitempty"` // "append" | "replace"
+	Interval     float64 `json:"interval,omitempty"`     // seconds (fractional ok for ms)
+	// ExerciseNode fields — used by learn tracks to pre-configure checks
+	Checks           []map[string]interface{} `json:"checks,omitempty"`
+	RevealHintsAfter int                      `json:"revealHintsAfter,omitempty"`
+	SuccessText      string                   `json:"successText,omitempty"`
+	NextID           string                   `json:"nextId,omitempty"`
 }
 
 type AIResponse struct {
@@ -356,6 +367,70 @@ func (a *App) execTool(name string, input map[string]any, actions *[]CanvasActio
 		}
 		*actions = append(*actions, CanvasAction{Type: "set_color", NodeID: id, Name: color})
 		return fmt.Sprintf("Set color of node %q to %q", id, color)
+	case "add_ingest_node":
+		n, _ := input["name"].(string)
+		mode, _ := input["mode"].(string)
+		sql, _ := input["sql"].(string)
+		url, _ := input["url"].(string)
+		targetTable, _ := input["target_table"].(string)
+		conflictMode, _ := input["conflict_mode"].(string)
+		interval, _ := input["interval"].(float64)
+		cid, _ := input["canvas_id"].(string)
+		if n == "" {
+			return "error: name is required"
+		}
+		if mode == "" {
+			mode = "generator"
+		}
+		if mode != "generator" && mode != "ingestion" {
+			return "error: mode must be \"generator\" or \"ingestion\""
+		}
+		if mode == "ingestion" && url == "" {
+			return "error: url is required for ingestion mode"
+		}
+		if conflictMode == "" {
+			conflictMode = "append"
+		}
+		id := "mcp_" + nodeSlug(n)
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "ingest", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{
+			Type: "ingest", NodeID: id, Name: n, CanvasID: cid,
+			Mode: mode, SQL: sql, URL: url, TargetTable: targetTable,
+			ConflictMode: conflictMode, Interval: interval,
+		})
+		return fmt.Sprintf("Added ingest node name=%q id=%q mode=%q interval=%gs", n, id, mode, interval)
+	case "add_exercise_node":
+		n, _ := input["name"].(string)
+		sql, _ := input["sql"].(string)
+		prompt, _ := input["prompt"].(string)
+		successText, _ := input["success_text"].(string)
+		nextID, _ := input["next_id"].(string)
+		cid, _ := input["canvas_id"].(string)
+		if n == "" {
+			return "error: name is required"
+		}
+		id := "mcp_" + nodeSlug(n)
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "exercise", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{
+			Type: "exercise", NodeID: id, Name: n, CanvasID: cid,
+			SQL: sql, Content: prompt, SuccessText: successText, NextID: nextID,
+		})
+		return fmt.Sprintf("Added exercise node name=%q id=%q", n, id)
+	case "add_test_node":
+		n, _ := input["name"].(string)
+		sql, _ := input["sql"].(string)
+		interval, _ := input["interval"].(float64)
+		cid, _ := input["canvas_id"].(string)
+		if n == "" {
+			return "error: name is required"
+		}
+		id := "mcp_" + nodeSlug(n)
+		a.mcpNodeRegistry.Store(id, mcpNodeEntry{ID: id, Name: n, Kind: "test", CanvasID: cid})
+		*actions = append(*actions, CanvasAction{
+			Type: "test", NodeID: id, Name: n, CanvasID: cid,
+			SQL: sql, Interval: interval,
+		})
+		return fmt.Sprintf("Added test node name=%q id=%q", n, id)
 	case "add_section":
 		n, _ := input["name"].(string)
 		w, _ := input["width"].(float64)
@@ -1062,6 +1137,54 @@ var anthropicTools = []map[string]any{
 				"color":   map[string]any{"type": "string", "description": "CSS hex color, e.g. #ef4444"},
 			},
 			"required": []string{"node_id", "color"},
+		},
+	},
+	{
+		"name":        "add_ingest_node",
+		"description": "Add a Generator or Ingestion node to the canvas. Generator mode runs a DML SQL statement on a schedule against DuckDB (good for synthetic live data). Ingestion mode fetches a URL on a schedule and appends or replaces a target table (desktop only — requires Go-side fetch to bypass CORS).",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":          map[string]any{"type": "string", "description": "Display name for the node"},
+				"mode":          map[string]any{"type": "string", "enum": []string{"generator", "ingestion"}, "description": "generator = run SQL on schedule; ingestion = fetch URL on schedule (default: generator)"},
+				"sql":           map[string]any{"type": "string", "description": "Generator mode: DML SQL to run (INSERT, UPDATE, etc.)"},
+				"url":           map[string]any{"type": "string", "description": "Ingestion mode: URL to fetch (CSV / Parquet / JSON)"},
+				"target_table":  map[string]any{"type": "string", "description": "Ingestion mode: DuckDB table name to write results into"},
+				"conflict_mode": map[string]any{"type": "string", "enum": []string{"append", "replace"}, "description": "How to handle existing rows in the target table (default: append)"},
+				"interval":      map[string]any{"type": "number", "description": "Run interval in seconds; fractional values allowed for sub-second (e.g. 0.25 = 250 ms). 0 = manual only (default)"},
+				"canvas_id":     map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		"name":        "add_exercise_node",
+		"description": "Create a self-contained exercise node with an embedded SQL editor and checks. Students write SQL directly in the card and hit Run to check their work. Chain multiple exercises together with next_id for a guided lesson flow.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "description": "Name for the exercise node (e.g. 'ex1_select_basics')"},
+				"sql":          map[string]any{"type": "string", "description": "Starter SQL shown to the student in the editor (e.g. 'SELECT ??? FROM sb_movies')"},
+				"prompt":       map[string]any{"type": "string", "description": "Markdown prompt shown to the student describing the exercise"},
+				"success_text": map[string]any{"type": "string", "description": "Markdown text revealed to the student when all checks pass — great for explanations, hints, or encouragement"},
+				"next_id":      map[string]any{"type": "string", "description": "Node ID of the next exercise in the chain; shown as a 'Next →' button when this exercise passes"},
+				"canvas_id":    map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		"name":        "add_test_node",
+		"description": "Create a TestNode that runs a SQL query on a schedule or manually and validates the result against configured checks. Use for data quality monitoring and automated assertions against pipeline outputs.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":      map[string]any{"type": "string", "description": "Name for the test node"},
+				"sql":       map[string]any{"type": "string", "description": "SQL query to run as the test"},
+				"interval":  map[string]any{"type": "number", "description": "Auto-run interval in seconds; 0 = manual only (default 0)"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
 		},
 	},
 	{

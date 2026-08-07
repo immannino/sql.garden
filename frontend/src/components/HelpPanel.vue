@@ -49,6 +49,9 @@ const SHORTCUT_SECTIONS = [
       { keys: ['C'], label: 'Add Chart node' },
       { keys: ['N'], label: 'Add Markdown note' },
       { keys: ['S'], label: 'Add Section' },
+      { keys: ['G'], label: 'Add Generator / Ingestion node' },
+      { keys: ['T'], label: 'Add Test node' },
+      { keys: ['E'], label: 'Add Exercise node' },
       { keys: ['I'], label: 'Open Import' },
       { keys: ['⌘', 'D'], label: 'Duplicate selected node(s)' },
     ],
@@ -62,6 +65,8 @@ const SHORTCUT_SECTIONS = [
       { keys: ['⌘', '−'], label: 'Zoom out' },
       { keys: ['⌘', '0'], label: 'Fit view (menu)' },
       { keys: ['L'], label: 'Toggle Layers panel' },
+      { keys: ['⌘', '⇧', 'E'], label: 'Toggle Exercises panel' },
+      { keys: ['⌘', '⇧', 'T'], label: 'Toggle Tests panel' },
       { keys: ['/'], label: 'Toggle Query panel' },
     ],
   },
@@ -162,7 +167,7 @@ function openLink(href: string) {
   width: 300px;
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), 0 1px 0 rgba(255,255,255,0.04) inset;
   display: flex;
   flex-direction: column;

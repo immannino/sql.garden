@@ -20,6 +20,7 @@ export default defineConfig({
       { text: 'Documentation', link: '/guide/introduction.md' },
       { text: 'Sandbox', link: 'https://sql.garden/sandbox' },
       { text: 'Download', link: 'https://github.com/immannino/sql.garden/releases/latest' },
+      { text: 'Blog', link: '/blog' },
     ],
 
     sidebar: [
@@ -37,6 +38,7 @@ export default defineConfig({
           { text: 'Nodes', link: '/guide/nodes' },
           { text: 'Connections', link: '/guide/connections' },
           { text: 'Import Data', link: '/guide/import' },
+          { text: 'Educational / Exercise Packs', link: '/guide/educational' },
         ],
       },
       {

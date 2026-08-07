@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import Canvas from './components/Canvas.vue'
 import CanvasTabs from './components/CanvasTabs.vue'
 import QueryPanel from './components/QueryPanel.vue'
 import ImportModal from './components/ImportModal.vue'
 import Sidebar from './components/Sidebar.vue'
+import ExercisesPanel from './components/ExercisesPanel.vue'
+import TestsPanel from './components/TestsPanel.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import DatasetPickerModal from './components/DatasetPickerModal.vue'
 import ChartPropertiesPanel from './components/ChartPropertiesPanel.vue'
@@ -26,6 +28,7 @@ import { exportData, type ExportFormat } from './lib/exportData'
 import { useSelection } from './composables/useSelection'
 import { IS_DESKTOP } from './lib/env'
 import { usePendingFullscreen } from './composables/usePendingFullscreen'
+import { useExerciseResults } from './composables/useExerciseResults'
 import type { main } from '../wailsjs/go/models'
 
 const { init, isReady, isLoading, initError, exec, query, getTableInfo, importTableFromJSON } = useDuckDB()
@@ -39,6 +42,7 @@ const { openPanel, closePanel } = useChartPanel()
 const { results: queryResults } = useQueryResults()
 const { chartResults } = useChartResults()
 const { pendingFullscreenId } = usePendingFullscreen()
+const { navigateRequest } = useExerciseResults()
 const showPalette = ref(false)
 const showSettings = ref(false)
 const settingsInitialTab = ref<'appearance' | 'mcp' | 'updates' | undefined>(undefined)
@@ -46,6 +50,8 @@ const showDatasetPicker = ref(false)
 const showHelp = ref(false)
 const updateBanner = ref(false)
 const loadError = ref<string | null>(null)
+const pendingPackUrl = ref<string | null>(null)
+const packImporting = ref(false)
 
 const WEB_QUICKSTART = `# Welcome to sql.garden 🌱
 
@@ -110,6 +116,54 @@ function addMarkdownNode() {
     x: center.x - 150,
     y: center.y - 100,
     content: '',
+  })
+}
+
+function addIngestNode() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const n = schemaStore.nodes.filter((n) => n.kind === 'ingest').length + 1
+  schemaStore.addIngestNode({
+    id: `ingest_${Date.now()}`,
+    name: `ingest_${n}`,
+    x: center.x - 170,
+    y: center.y - 80,
+    color: '#6366f1',
+    mode: 'generator',
+    sql: '',
+    url: '',
+    targetTable: '',
+    conflictMode: 'append',
+    interval: 0,
+  })
+}
+
+function addExerciseNode() {
+  const center = canvasRef.value?.getCenter() ?? { x: 200, y: 200 }
+  const n = schemaStore.nodes.filter((n) => n.kind === 'exercise').length + 1
+  schemaStore.addExerciseNode({
+    id: `exercise_${Date.now()}`,
+    name: `exercise_${n}`,
+    x: center.x - 220,
+    y: center.y - 160,
+    color: '#f59e0b',
+    sql: '',
+    prompt: '',
+    checks: [],
+    revealHintsAfter: 0,
+  })
+}
+
+function addTestNode() {
+  const n = schemaStore.nodes.filter((n) => n.kind === 'test').length + 1
+  schemaStore.addTestNode({
+    id: `test_${Date.now()}`,
+    name: `Test ${n}`,
+    x: 100 + Math.random() * 200,
+    y: 100 + Math.random() * 200,
+    sql: 'SELECT 1 AS ok',
+    assertionMode: 'no_rows',
+    interval: 0,
+    history: [],
   })
 }
 
@@ -217,6 +271,8 @@ const importModalRef = ref<InstanceType<typeof ImportModal> | null>(null)
 const webFileInputRef = ref<HTMLInputElement | null>(null)
 const showQuery = ref(true)
 const showSidebar = ref(true)
+const showAssertions = ref(false)
+const showTests = ref(false)
 const showImport = ref(false)
 const initialPathsForModal = ref<string[]>([])
 
@@ -297,7 +353,10 @@ function contextMenuSections(): MenuSection[] {
     return [
       { label: 'Add Query node',    shortcut: 'Q', action: () => { if (isReady.value) addQueryNode() } },
       { label: 'Add Chart node',    shortcut: 'C', action: () => { if (isReady.value) addChartNode() } },
-      { label: 'Add Markdown note', shortcut: 'N', action: addMarkdownNode },
+      { label: 'Add Ingest node',     shortcut: 'G', action: () => { if (isReady.value) addIngestNode() } },
+      { label: 'Add Exercise node',   shortcut: 'E', action: () => { if (isReady.value) addExerciseNode() } },
+      { label: 'Add Test node',       shortcut: 'T', action: () => { if (isReady.value) addTestNode() } },
+      { label: 'Add Markdown note',   shortcut: 'N', action: addMarkdownNode },
       { label: 'Add Section',       shortcut: 'S', action: addSection },
       { divider: true },
       { label: 'Import nodes from .sql.garden.json…', action: () => jsonImportInputRef.value?.click() },
@@ -397,7 +456,7 @@ function onCreateQueryFromConnection(payload: { name: string; sql: string }) {
 
 const jsonImportInputRef = ref<HTMLInputElement | null>(null)
 
-import type { CanvasNode } from './stores/schema'
+import type { CanvasNode, ExerciseCheck } from './stores/schema'
 
 function serializeForExport(node: CanvasNode): Record<string, unknown> {
   // Spread all fields; drop sqlHistory (internal undo state, not useful in export)
@@ -443,6 +502,35 @@ async function doExportNodes(nodeIds: string[]) {
   const bundle = { version: 1, exportedAt: new Date().toISOString(), nodes: exportedNodes }
   const json = JSON.stringify(bundle, null, 2)
   const filename = toExport.length === 1 ? `${toExport[0].name}.sql.garden.json` : 'canvas_nodes.sql.garden.json'
+  if (IS_DESKTOP) {
+    const { SaveFileWithDialog } = await import('../wailsjs/go/main/App')
+    await SaveFileWithDialog(filename, json)
+  } else {
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = filename
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 150)
+  }
+}
+
+async function exportCanvasTab(canvasId: string) {
+  const canvas = schemaStore.canvases.find(c => c.id === canvasId)
+  if (!canvas || !canvas.nodes.length) return
+  const exportedNodes: Record<string, unknown>[] = []
+  for (const node of canvas.nodes) {
+    const n = serializeForExport(node)
+    if ((node.kind === 'data' || node.kind === 'table') && isReady.value) {
+      try {
+        const res = await query(`SELECT * FROM "${node.name}"`)
+        n._rows = res.rows
+      } catch { /* table not in DuckDB — export metadata only */ }
+    }
+    exportedNodes.push(n)
+  }
+  const bundle = { version: 1, exportedAt: new Date().toISOString(), nodes: exportedNodes }
+  const json = JSON.stringify(bundle, null, 2)
+  const filename = `${canvas.name}.sql.garden.json`
   if (IS_DESKTOP) {
     const { SaveFileWithDialog } = await import('../wailsjs/go/main/App')
     await SaveFileWithDialog(filename, json)
@@ -536,6 +624,26 @@ async function importNodeBundle(rawNodes: Record<string, unknown>[]) {
         trueColor: node.trueColor,
         falseColor: node.falseColor,
       })
+    } else if (node.kind === 'ingest') {
+      schemaStore.addIngestNode({
+        ...base,
+        mode: node.mode ?? 'generator',
+        sql: node.sql ?? '',
+        url: node.url ?? '',
+        targetTable: node.targetTable ?? '',
+        conflictMode: node.conflictMode ?? 'append',
+        interval: node.interval ?? 0,
+      })
+    } else if (node.kind === 'exercise') {
+      schemaStore.addExerciseNode({
+        ...base,
+        sql: typeof node.sql === 'string' ? node.sql : '',
+        prompt: node.prompt ?? '',
+        successText: typeof node.successText === 'string' ? node.successText : '',
+        checks: Array.isArray(node.checks) ? node.checks : [],
+        revealHintsAfter: typeof node.revealHintsAfter === 'number' ? node.revealHintsAfter : 0,
+        nextId: typeof node.nextId === 'string' ? node.nextId : undefined,
+      })
     } else if (node.kind === 'data' || node.kind === 'table') {
       let columns = Array.isArray(node.columns) ? node.columns : []
       let rowCount = typeof node.rowCount === 'number' ? node.rowCount : 0
@@ -551,6 +659,33 @@ async function importNodeBundle(rawNodes: Record<string, unknown>[]) {
         schemaStore.addTable({ ...base, name, columns, rowCount, columnCasts: node.columnCasts })
       }
     }
+  }
+}
+
+async function confirmPackImport() {
+  const packURL = pendingPackUrl.value
+  if (!packURL) return
+  packImporting.value = true
+  try {
+    let text: string
+    if (IS_DESKTOP) {
+      const { FetchPackJSON } = await import('../wailsjs/go/main/App')
+      text = await FetchPackJSON(packURL)
+    } else {
+      const resp = await fetch(packURL)
+      if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+      text = await resp.text()
+    }
+    const bundle = JSON.parse(text)
+    if (bundle.version !== 1 || !Array.isArray(bundle.nodes)) throw new Error('Not a valid sql.garden pack (expected version:1)')
+    await importNodeBundle(bundle.nodes)
+    pendingPackUrl.value = null
+  } catch (err) {
+    loadError.value = `Pack import failed: ${err instanceof Error ? err.message : String(err)}`
+    setTimeout(() => { loadError.value = null }, 8000)
+    pendingPackUrl.value = null
+  } finally {
+    packImporting.value = false
   }
 }
 
@@ -878,6 +1013,32 @@ function handleCanvasAction(action: main.CanvasAction) {
       w: action.width || 400,
       h: action.height || 300,
     }))
+  } else if (action.type === 'ingest') {
+    withTarget(() => schemaStore.addIngestNode({
+      id,
+      name: action.name,
+      ...pos,
+      color: '#6366f1',
+      mode: (action.mode as 'generator' | 'ingestion') || 'generator',
+      sql: action.sql ?? '',
+      url: action.url ?? '',
+      targetTable: action.targetTable ?? '',
+      conflictMode: (action.conflictMode as 'append' | 'replace') || 'append',
+      interval: Number(action.interval ?? 0),
+    }))
+  } else if (action.type === 'exercise') {
+    withTarget(() => schemaStore.addExerciseNode({
+      id,
+      name: action.name,
+      ...pos,
+      color: '#f59e0b',
+      sql: action.sql ?? '',
+      prompt: action.content ?? '',
+      checks: Array.isArray(action.checks) ? action.checks as ExerciseCheck[] : [],
+      revealHintsAfter: action.revealHintsAfter ?? 0,
+      successText: action.successText ?? '',
+      nextId: action.nextId || undefined,
+    }))
   }
   if (!action.hasPosition) setTimeout(() => canvasRef.value?.fitView(), 120)
 }
@@ -908,6 +1069,24 @@ async function loadDataset(id: string) {
   } catch (e) {
     console.error('loadDataset failed', e)
     loadError.value = `Failed to load dataset: ${e instanceof Error ? e.message : String(e)}`
+    setTimeout(() => { loadError.value = null }, 6000)
+  }
+}
+
+async function loadLearnTrack(id: string) {
+  showDatasetPicker.value = false
+  try {
+    const { LoadLearnTrack } = await import('../wailsjs/go/main/App')
+    const actions = await LoadLearnTrack(id)
+    schemaStore.clear()
+    aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
+    for (const action of actions) {
+      handleCanvasAction(action)
+    }
+    setTimeout(() => canvasRef.value?.fitView(), 200)
+  } catch (e) {
+    console.error('loadLearnTrack failed', e)
+    loadError.value = `Failed to load learning track: ${e instanceof Error ? e.message : String(e)}`
     setTimeout(() => { loadError.value = null }, 6000)
   }
 }
@@ -961,14 +1140,15 @@ async function onDesktopClipboardKey(e: KeyboardEvent) {
       el.dispatchEvent(new Event('input', { bubbles: true }))
     }
   } else if (e.key === 'v') {
-    e.preventDefault()
     const text = await ClipboardGet()
     if (text) {
+      e.preventDefault()
       const start = el.selectionStart ?? el.value.length
       const end = el.selectionEnd ?? el.value.length
       el.setRangeText(text, start, end, 'end')
       el.dispatchEvent(new Event('input', { bubbles: true }))
     }
+    // If ClipboardGet returns empty, fall through to native paste
   }
 }
 
@@ -1207,9 +1387,10 @@ function onGlobalKey(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey) {
     if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); schemaStore.undo(); return }
     if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); schemaStore.redo(); return }
-    if (e.key === 'c' && selectedIds.value.size > 0) { e.preventDefault(); copySelectedToClipboard(); return }
+    if (e.key === 'c' && selectedIds.value.size > 0 && !window.getSelection()?.toString()) { e.preventDefault(); copySelectedToClipboard(); return }
     if (e.key === 'v') { e.preventDefault(); pasteFromClipboard(); return }
     if (e.key === ',') { e.preventDefault(); showSettings.value = !showSettings.value }
+    if (e.key === 't' && e.shiftKey) { e.preventDefault(); showTests.value = !showTests.value; return }
     if (e.key === 't') { e.preventDefault(); onTabAdd(); return }
     if (e.key === '=' || e.key === '+') { e.preventDefault(); canvasRef.value?.zoomIn() }
     if (e.key === '-') { e.preventDefault(); canvasRef.value?.zoomOut() }
@@ -1232,6 +1413,9 @@ function onGlobalKey(e: KeyboardEvent) {
   switch (e.key.toLowerCase()) {
     case 'q': if (isReady.value) { e.preventDefault(); addQueryNode() } break
     case 'c': if (isReady.value) { e.preventDefault(); addChartNode() } break
+    case 'g': if (isReady.value) { e.preventDefault(); addIngestNode() } break
+    case 'e': if (isReady.value) { e.preventDefault(); addExerciseNode() } break
+    case 't': if (isReady.value) { e.preventDefault(); addTestNode() } break
     case 'n': e.preventDefault(); addMarkdownNode(); break
     case 's': e.preventDefault(); addSection(); break
     case 'i': if (isReady.value) { e.preventDefault(); showImport.value = true } break
@@ -1241,6 +1425,12 @@ function onGlobalKey(e: KeyboardEvent) {
     case '?': e.preventDefault(); showHelp.value = !showHelp.value; break
   }
 }
+
+// Navigate to a specific exercise node when the student clicks "Next Lesson" in AssertionCard
+watch(navigateRequest, (req) => {
+  if (!req) return
+  nextTick(() => canvasRef.value?.focusNode(req.id))
+})
 
 onMounted(async () => {
   if (IS_DESKTOP) {
@@ -1257,9 +1447,17 @@ onMounted(async () => {
     EventsOn('menu:zoom-in',        () => canvasRef.value?.zoomIn())
     EventsOn('menu:zoom-out',       () => canvasRef.value?.zoomOut())
     EventsOn('menu:zoom-reset',     () => canvasRef.value?.fitView())
-    EventsOn('menu:toggle-layers',  () => { showSidebar.value = !showSidebar.value })
-    EventsOn('menu:toggle-query',   () => { showQuery.value = !showQuery.value })
+    EventsOn('menu:toggle-layers',     () => { showSidebar.value = !showSidebar.value })
+    EventsOn('menu:toggle-query',      () => { showQuery.value = !showQuery.value })
+    EventsOn('menu:toggle-exercises', () => { showAssertions.value = !showAssertions.value })
+    EventsOn('menu:toggle-tests',     () => { showTests.value = !showTests.value })
     EventsOn('menu:shortcuts',      () => { showHelp.value = !showHelp.value })
+    EventsOn('deep-link:import',    (packURL: string) => { pendingPackUrl.value = packURL })
+  }
+  // Web sandbox: check for ?import=<url> query param (deep-link equivalent for browser)
+  if (!IS_DESKTOP) {
+    const importParam = new URLSearchParams(window.location.search).get('import')
+    if (importParam) pendingPackUrl.value = importParam
   }
   window.addEventListener('keydown', onGlobalKey)
   // Wails macOS: native clipboard shortcuts don't reach the WKWebView without
@@ -1548,6 +1746,7 @@ onUnmounted(async () => {
       @add="onTabAdd"
       @remove="onTabRemove"
       @rename="schemaStore.renameCanvas"
+      @export="exportCanvasTab"
     />
 
     <!-- Main content -->
@@ -1568,6 +1767,36 @@ onUnmounted(async () => {
           </svg>
         </button>
 
+        <button
+          class="rail-btn"
+          :class="{ active: showAssertions }"
+          title="Exercise nodes"
+          @click="showAssertions = !showAssertions"
+        >
+          <!-- Checkmark list icon -->
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M2 4l1.5 1.5L6 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8 4.5h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <path d="M2 8.5l1.5 1.5L6 7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8 9h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <rect x="2" y="11.5" width="3" height="3" rx="0.5" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M8 13h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <button
+          class="rail-btn"
+          :class="{ active: showTests }"
+          title="Test nodes (⌘⇧T)"
+          @click="showTests = !showTests"
+        >
+          <!-- Shield icon -->
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M8 2L3 4.5v4C3 11.5 5.5 14 8 14.5 10.5 14 13 11.5 13 8.5v-4L8 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+            <path d="M5.5 8.5l2 2 3.5-3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
         <!-- Spacer pushes gear to bottom -->
         <div class="rail-spacer" />
 
@@ -1585,6 +1814,8 @@ onUnmounted(async () => {
       </nav>
 
       <Sidebar v-if="showSidebar" @focus-node="onFocusNode" @create-query="onCreateQueryFromConnection" />
+      <ExercisesPanel v-if="showAssertions" @focus-node="onFocusNode" />
+      <TestsPanel v-if="showTests" @focus-node="onFocusNode" />
       <Canvas ref="canvasRef" @mosaic-contents="mosaicSectionContents" @fit-contents="fitSectionContents" />
       <QueryPanel v-if="showQuery" ref="queryPanelRef" @close="showQuery = false" @create="onPanelCreate" />
 
@@ -1613,6 +1844,14 @@ onUnmounted(async () => {
           <svg viewBox="0 0 16 16" fill="none">
             <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.3"/>
             <polyline points="3,11 6,6 9,9 13,4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <button class="fab-btn" :disabled="!isReady" title="Ingest — add generator/ingestion node (G)" @click="addIngestNode">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M2 3h12l-4.5 5.5v4l-3-1.5V8.5L2 3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+            <circle cx="13" cy="13" r="2" fill="currentColor" fill-opacity="0.2" stroke="currentColor" stroke-width="1.2"/>
+            <path d="M12 13h2M13 12v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
           </svg>
         </button>
 
@@ -1652,6 +1891,7 @@ onUnmounted(async () => {
       v-if="showDatasetPicker"
       @close="showDatasetPicker = false"
       @load="loadDataset"
+      @load-learn="loadLearnTrack"
     />
 
     <!-- Chart properties panel (Figma-style right rail) -->
@@ -1679,6 +1919,26 @@ onUnmounted(async () => {
       style="display:none"
       @change="onNodeImportFile"
     />
+
+    <!-- sqlgarden:// deep-link import confirmation -->
+    <Teleport to="body">
+      <div v-if="pendingPackUrl" class="pack-import-backdrop" @mousedown.self="pendingPackUrl = null">
+        <div class="pack-import-dialog">
+          <h3 class="pack-import-title">Import pack?</h3>
+          <p class="pack-import-body">
+            The following URL wants to add nodes and SQL to your canvas.
+            Only import packs from sources you trust.
+          </p>
+          <code class="pack-import-url">{{ pendingPackUrl }}</code>
+          <div class="pack-import-actions">
+            <button class="pack-btn-cancel" :disabled="packImporting" @click="pendingPackUrl = null">Cancel</button>
+            <button class="pack-btn-import" :disabled="packImporting" @click="confirmPackImport">
+              {{ packImporting ? 'Importing…' : 'Import' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Dataset load error toast -->
     <Transition name="toast">
@@ -1948,7 +2208,7 @@ onUnmounted(async () => {
   color: var(--text-secondary);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 7px;
   cursor: pointer;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 
@@ -2076,7 +2336,7 @@ onUnmounted(async () => {
 .error-card {
   background: var(--surface-1);
   border: 1px solid var(--error);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 28px 32px;
   max-width: 480px;
   width: 90%;
@@ -2105,6 +2365,82 @@ onUnmounted(async () => {
 .error-hint a {
   color: var(--accent);
 }
+
+/* ── Deep-link import confirm ───────────────────────────────────────────────── */
+.pack-import-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pack-import-dialog {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  width: 480px;
+  max-width: calc(100vw - 40px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.pack-import-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+.pack-import-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+.pack-import-url {
+  display: block;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  word-break: break-all;
+}
+.pack-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.pack-btn-cancel {
+  padding: 6px 16px;
+  font-size: 13px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.pack-btn-cancel:hover:not(:disabled) { border-color: var(--text-muted); }
+.pack-btn-import {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.1s;
+}
+.pack-btn-import:hover:not(:disabled) { opacity: 0.85; }
+.pack-btn-cancel:disabled,
+.pack-btn-import:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .load-error-toast {
   position: fixed;
