@@ -568,6 +568,54 @@ var mcpToolDefs = []map[string]any{
 			},
 		},
 	},
+	{
+		"name":        "add_ingest_node",
+		"description": "Add a Generator or Ingestion node. Generator mode runs a DML SQL statement (INSERT/UPDATE) on a timer — good for synthetic live data. Ingestion mode fetches a URL on a schedule and appends or replaces a target table.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":          map[string]any{"type": "string", "description": "Display name for the node"},
+				"mode":          map[string]any{"type": "string", "enum": []string{"generator", "ingestion"}, "description": "generator (default) or ingestion"},
+				"sql":           map[string]any{"type": "string", "description": "Generator mode: DML SQL to run on each tick"},
+				"url":           map[string]any{"type": "string", "description": "Ingestion mode: URL to fetch (CSV / Parquet / JSON)"},
+				"target_table":  map[string]any{"type": "string", "description": "Ingestion mode: DuckDB table to write into"},
+				"conflict_mode": map[string]any{"type": "string", "enum": []string{"append", "replace"}, "description": "append (default) or replace"},
+				"interval":      map[string]any{"type": "number", "description": "Run interval in seconds; 0 = manual only (default)"},
+				"canvas_id":     map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		"name":        "add_exercise_node",
+		"description": "Create an interactive exercise node with an embedded SQL editor and validator. Students write SQL and press Run to check their work. Chain exercises with next_id to build a guided lesson flow.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":         map[string]any{"type": "string", "description": "Name for the exercise node (e.g. ex1_select_basics)"},
+				"sql":          map[string]any{"type": "string", "description": "Starter SQL pre-filled in the student's editor"},
+				"prompt":       map[string]any{"type": "string", "description": "Markdown prompt shown to the student"},
+				"success_text": map[string]any{"type": "string", "description": "Markdown revealed when all checks pass"},
+				"next_id":      map[string]any{"type": "string", "description": "Node ID of the next exercise; shows a Next button when this exercise passes"},
+				"canvas_id":    map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
+		},
+	},
+	{
+		"name":        "add_test_node",
+		"description": "Create a data quality test node that runs a SQL query on a schedule and validates the result. Use for automated assertions against pipeline outputs, row count guards, and freshness checks.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":      map[string]any{"type": "string", "description": "Name for the test node"},
+				"sql":       map[string]any{"type": "string", "description": "SQL query to run as the test"},
+				"interval":  map[string]any{"type": "number", "description": "Auto-run interval in seconds; 0 = manual only (default)"},
+				"canvas_id": map[string]any{"type": "string", "description": "Canvas tab to add the node to; default is the active canvas"},
+			},
+			"required": []string{"name"},
+		},
+	},
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

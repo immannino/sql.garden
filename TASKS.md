@@ -1,7 +1,7 @@
 # sql.garden — Task Tracker
 
 > Version: v0.0.1-alpha
-> Updated: 2026-08-05 (session 14)
+> Updated: 2026-08-07 (session 15)
 
 ---
 
@@ -174,6 +174,8 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [x] `tools/list` — updated to assert `import_s3` is registered
 - [x] `import_s3` — missing s3_url error, non-s3:// scheme error, missing table_name error (3 validation scenarios)
 - [x] **Canvas tab tool tests** — `tools/list` updated to assert `list_canvases`, `create_canvas`, `rename_canvas`, `switch_canvas`, `remove_canvas` are registered; 22 new scenarios across 8 groups: list_canvases, create_canvas (×2 including ID extraction from response), rename_canvas (×3), switch_canvas (×2), remove_canvas (×2), `canvas_id` targeting on 4 node tools, `list_canvas_nodes` filter (×2), `clear_canvas` scoped (×2), end-to-end multi-canvas flow; `extractCanvasID` helper parses `id="..."` from response text
+- [x] **`add_exercise_node` tests** — 6 scenarios: emits canvas action with name/prompt, sql propagates, missing name returns error, canvas_id propagates, success_text propagates, next_id propagates. `tools/list` updated to assert `add_exercise_node` and `add_test_node` registered.
+- [x] **`add_test_node` tests** — 2 scenarios: emits canvas action with name and sql, missing name returns error.
 
 ---
 
@@ -195,7 +197,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Query / Data
 - [ ] **CORS proxy for URL imports** — URL imports fail for servers without permissive CORS headers. Plan: Cloudflare Worker / Vercel Edge function that fetches server-side and streams bytes back.
-- [ ] **Generator / Ingestion node** — New node type that writes to a DataNode on a schedule. Two modes: (1) **Generator** — pure SQL INSERT using DuckDB functions (`now()`, `random()`, `gen_random_uuid()`) runs on a timer, no network, works offline; good for synthetic live data in the tutorial. (2) **Ingestion** — fetches a URL/API on a schedule, parses response, appends/upserts to a DataNode; dedup UI ("append all / skip duplicates / replace duplicates") compiles to `ON CONFLICT DO NOTHING` or a staging merge. Scheduling: simple intervals first (reuses `refreshInterval` pattern on Go side), full cron expressions (`robfig/cron`) as follow-on. Desktop-first — Go scheduler runs independent of webview so backgrounding isn't an issue. Card shows: last run time, rows added this run, total rows in target, run-now button. Replaces the tabled "data loaders" idea with a safer structured approach. MCP tool (`add_ingest_node`, `set_ingest_schedule`) as follow-on.
+- [x] **Generator / Ingestion node** — Done; see Educational & Testing Nodes section above.
 
 ### S3 / Object Storage
 - [x] **S3 bucket connection** — S3/R2/MinIO as a connection type in the Sidebar. Per-connection credentials (bucket, key, secret, region, endpoint) stored as JSON in the DSN field. On connect: httpfs secret created with bucket SCOPE so multiple S3 connections coexist. File browser lists all .parquet/.csv/.json/.jsonl/.ndjson files; clicking opens a QueryNode with `read_parquet/read_csv_auto/read_json_auto`. Refresh button re-lists. DisconnectSaved drops the secret.
@@ -208,6 +210,17 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 
 ### Canvas Structure
 - [x] **Canvas tabs** — See Canvas Operations above. Done.
+
+### Educational & Testing Nodes
+- [x] **ExerciseNode** — Student-facing interactive exercise card (renamed from AssertionNode). Markdown prompt, embedded SQL editor, check validation, pass/fail feedback, `successText` on pass, `nextId` chains exercises. Checks: `set_match`, `row_count`, `non_empty`, `no_nulls`, `column_value`, `column_exists`, `sql_pattern`. Backward-compat: `kind: 'assertion'` still loads as ExerciseNode.
+- [x] **Exercises Panel** — Left-rail sidebar listing all exercises in the canvas with progress stats, focus-on-click. `⌘⇧E` toggle, macOS View menu entry.
+- [x] **TestNode** — Author-facing data quality monitor. Three assertion modes: No rows (0 rows = pass), Scalar equals (first cell vs expected), Row count (count vs expected). Operator support: `==`, `>=`, `<=`, `>`, `<`. Auto-run timer with configurable interval, run history sparkline in view mode. Status badge in header.
+- [x] **Tests Panel** — Left-rail sidebar with aggregate pass/fail stats, per-test status dots, mode chips, last-run timestamps, mini sparklines. `⌘⇧T` toggle, macOS View menu entry.
+- [x] **`add_exercise_node` MCP tool** — `name`, `sql`, `prompt`, `success_text`, `next_id`, `canvas_id`. Full integration tests (6 scenarios).
+- [x] **`add_test_node` MCP tool** — `name`, `sql`, `interval`, `canvas_id`. Integration tests (2 scenarios). Both tools documented in `docs/mcp/tools.md`.
+
+### Generator / Ingestion Node
+- [x] **IngestNode** — Two modes: (1) **Generator** — runs SQL DML on a schedule (INSERT/UPDATE using DuckDB functions), good for synthetic live data; (2) **Ingestion** — fetches a remote URL on a schedule, loads into a named DuckDB table. Conflict modes: `append` / `replace`. Configurable interval (`0` = manual). Tracks `lastRunAt` and `lastRowsAdded`. Keyboard shortcut: `G`.
 
 ### Samples & Learning
 - [x] **Sample picker UX — multi-section layout** — Three-tab modal: Built-in / Learn SQL / Community (coming soon). Level badges, chapter/row counts, tags.
@@ -240,7 +253,7 @@ Run with: `go run ./cmd/mcp-test` (app must be running first)
 - [ ] **Canvas persistence on web** — State resets on page reload; could use IndexedDB or localStorage.
 
 ### Docs
-- [ ] **MCP docs update** — `docs/` VitePress site MCP tools reference is out of date. New tools to document: `resize_node`, `move_node`, `focus_node`, `update_query_node`, `import_csv_data`, `import_url`, `import_s3`, `materialize_query`, `set_node_color`, `add_section`, `list_canvases`, `create_canvas`, `rename_canvas`, `switch_canvas`, `remove_canvas`. All node-adding tools now accept optional `canvas_id`. `list_canvas_nodes` accepts optional `canvas_id` filter. `clear_canvas` is now scoped by `canvas_id`. `add_chart_node` `chart_type` enum extended to 14 types.
+- [x] **MCP docs update** — All 27 tools documented in `docs/mcp/tools.md`. Discovered and fixed a gap: `add_ingest_node`, `add_exercise_node`, and `add_test_node` had exec handlers in `ai.go` but were missing from `mcp.go`'s `mcpToolDefs` — MCP clients calling `tools/list` would never see them. Added all three to `mcp.go`.
 
 ### Website & Distribution
 - [x] **VitePress docs site** — Scaffolded at `docs/`, serves from `/` (root). Custom theme: brand green `#18b569`, MockCanvas hero, light/dark theme support. Content: Introduction, Installation, Quick Start, Nodes (all 15 chart types), Connections, Import, MCP overview/config/tools reference. GitHub badges in hero and footer. "OPEN SOURCE · LOCAL-FIRST" pill above footer.

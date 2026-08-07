@@ -1076,12 +1076,22 @@ async function loadDataset(id: string) {
 async function loadLearnTrack(id: string) {
   showDatasetPicker.value = false
   try {
-    const { LoadLearnTrack } = await import('../wailsjs/go/main/App')
-    const actions = await LoadLearnTrack(id)
+    let actions: unknown[]
+    if (IS_DESKTOP) {
+      const { LoadLearnTrack } = await import('../wailsjs/go/main/App')
+      actions = await LoadLearnTrack(id)
+    } else {
+      const { getWebLearnTrackSQL, getWebLearnTrackActions } = await import('./lib/learnTracksWeb')
+      for (const sql of getWebLearnTrackSQL(id)) {
+        await exec(sql)
+      }
+      actions = getWebLearnTrackActions(id)
+    }
     schemaStore.clear()
     aiPlacementIndex = 0; aiOriginX = null; aiOriginY = null
     for (const action of actions) {
-      handleCanvasAction(action)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      handleCanvasAction(action as any)
     }
     setTimeout(() => canvasRef.value?.fitView(), 200)
   } catch (e) {
