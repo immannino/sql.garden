@@ -18,7 +18,7 @@
   ],
   "info": {
     "productName": "sql.garden",
-    "productVersion": "v0.0.4-alpha",
+    "productVersion": "v0.0.5-alpha",
     "copyright": "© Tony Mannino",
     "comments": "In-browser SQL canvas backed by DuckDB"
   }
