@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { IS_DESKTOP } from '../lib/env'
 import type { main } from '../../wailsjs/go/models'
 
 const emit = defineEmits<{
@@ -18,15 +17,20 @@ const loading = ref<string | null>(null)
 
 onMounted(async () => {
   try {
-    if (IS_DESKTOP) {
-      const { ListSampleDatasets, ListLearnTracks } = await import('../../wailsjs/go/main/App')
-      datasets.value = await ListSampleDatasets()
-      learnTracks.value = await ListLearnTracks()
-    } else {
-      const { WEB_DATASETS } = await import('../lib/webSampleData')
+    const { ListSampleDatasets, ListLearnTracks } = await import('../../wailsjs/go/main/App')
+    datasets.value = await ListSampleDatasets()
+    learnTracks.value = await ListLearnTracks()
+  } catch {
+    // Not running in Wails — fall back to web (WASM) data
+    try {
+      const [{ WEB_DATASETS }, { WEB_LEARN_TRACKS }] = await Promise.all([
+        import('../lib/webSampleData'),
+        import('../lib/learnTracksWeb'),
+      ])
       datasets.value = WEB_DATASETS as unknown as main.SampleDataset[]
-    }
-  } catch { /* ignore */ }
+      learnTracks.value = WEB_LEARN_TRACKS as unknown as main.LearnTrack[]
+    } catch { /* ignore */ }
+  }
   window.addEventListener('keydown', onKey)
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
@@ -119,44 +123,38 @@ async function selectLearn(id: string) {
 
       <!-- Learn SQL tracks -->
       <div v-else-if="activeSection === 'learn'" class="dataset-grid">
-        <div v-if="!IS_DESKTOP" class="learn-notice">
-          <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><line x1="8" y1="5" x2="8" y2="8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11" r="0.7" fill="currentColor"/></svg>
-          Learning tracks require the desktop app — data is generated locally in DuckDB.
-        </div>
-        <template v-else>
-          <div
-            v-for="lt in learnTracks"
-            :key="lt.id"
-            class="dataset-card learn-card"
-            :class="{ loading: loading === lt.id }"
-          >
-            <div class="card-icon">{{ lt.icon }}</div>
-            <div class="card-body">
-              <div class="card-name">
-                {{ lt.name }}
-                <span class="level-badge" :class="`level-${lt.level.toLowerCase()}`">{{ lt.level }}</span>
-              </div>
-              <div class="card-desc">{{ lt.description }}</div>
-              <div class="card-meta">
-                <span>{{ lt.chapters }} chapters</span>
-                <span class="card-dot">·</span>
-                <span>{{ lt.tables.length }} tables</span>
-                <span class="card-dot">·</span>
-                <span>{{ lt.rowCount.toLocaleString() }} rows</span>
-              </div>
-              <div class="card-tags">
-                <span v-for="tag in lt.tags" :key="tag" class="tag">{{ tag }}</span>
-              </div>
+        <div
+          v-for="lt in learnTracks"
+          :key="lt.id"
+          class="dataset-card learn-card"
+          :class="{ loading: loading === lt.id }"
+        >
+          <div class="card-icon">{{ lt.icon }}</div>
+          <div class="card-body">
+            <div class="card-name">
+              {{ lt.name }}
+              <span class="level-badge" :class="`level-${lt.level.toLowerCase()}`">{{ lt.level }}</span>
             </div>
-            <button class="load-btn" :disabled="loading !== null" @click="selectLearn(lt.id)">
-              <span v-if="loading === lt.id" class="spinner" />
-              <span v-else>Open</span>
-            </button>
+            <div class="card-desc">{{ lt.description }}</div>
+            <div class="card-meta">
+              <span>{{ lt.chapters }} chapters</span>
+              <span class="card-dot">·</span>
+              <span>{{ lt.tables.length }} tables</span>
+              <span class="card-dot">·</span>
+              <span>{{ lt.rowCount.toLocaleString() }} rows</span>
+            </div>
+            <div class="card-tags">
+              <span v-for="tag in lt.tags" :key="tag" class="tag">{{ tag }}</span>
+            </div>
           </div>
-          <div v-if="learnTracks.length === 0" class="empty-section">
-            No learning tracks available.
-          </div>
-        </template>
+          <button class="load-btn" :disabled="loading !== null" @click="selectLearn(lt.id)">
+            <span v-if="loading === lt.id" class="spinner" />
+            <span v-else>Open</span>
+          </button>
+        </div>
+        <div v-if="learnTracks.length === 0" class="empty-section">
+          No learning tracks available.
+        </div>
       </div>
 
       <!-- Community (coming soon) -->
